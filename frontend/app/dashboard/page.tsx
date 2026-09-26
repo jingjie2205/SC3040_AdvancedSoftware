@@ -153,7 +153,7 @@ export default function HomePage() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   // Training / food view toggles
-  const [trainingView, setTrainingView] = useState<TrainingView>("weekly");
+  const [trainingView, setTrainingView] = useState<TrainingView>("latest");
   const [foodView, setFoodView] = useState<FoodView>("daily");
 
   // Check-in state
@@ -234,6 +234,8 @@ export default function HomePage() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                {/* Apple health button */}
+
                 <button
                   onClick={() => handleImport("Apple Health")}
                   disabled={importingSource !== null}
@@ -246,6 +248,7 @@ export default function HomePage() {
                   )}
                   Apple Health
                 </button>
+                {/* SamsungHealth button */}
                 <button
                   onClick={() => handleImport("Samsung Health")}
                   disabled={importingSource !== null}
@@ -258,6 +261,32 @@ export default function HomePage() {
                   )}
                   Samsung Health
                 </button>
+              </div>
+              {/* Edit button */}
+              <div className="flex items-center gap-2">
+                {!editingHealth ? (
+                  <button
+                    onClick={startEditHealth}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/90 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-700 hover:text-white disabled:opacity-50"
+                  >
+                    <Pencil className="h-3.5 w-3.5" /> Edit manually
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => setEditingHealth(false)}
+                      className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:bg-slate-800"
+                    >
+                      <X className="h-3.5 w-3.5" /> Cancel
+                    </button>
+                    <button
+                      onClick={saveHealth}
+                      className="flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-black transition hover:opacity-90"
+                    >
+                      <Save className="h-3.5 w-3.5" /> Save changes
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
@@ -331,32 +360,6 @@ export default function HomePage() {
                 </label>
               </div>
             )}
-
-            <div className="mt-4 flex justify-end gap-2">
-              {!editingHealth ? (
-                <button
-                  onClick={startEditHealth}
-                  className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-800"
-                >
-                  <Pencil className="h-3.5 w-3.5" /> Edit manually
-                </button>
-              ) : (
-                <>
-                  <button
-                    onClick={() => setEditingHealth(false)}
-                    className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:bg-slate-800"
-                  >
-                    <X className="h-3.5 w-3.5" /> Cancel
-                  </button>
-                  <button
-                    onClick={saveHealth}
-                    className="flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-black transition hover:opacity-90"
-                  >
-                    <Save className="h-3.5 w-3.5" /> Save changes
-                  </button>
-                </>
-              )}
-            </div>
           </div>
 
           {/* Daily check-in */}
@@ -439,7 +442,7 @@ export default function HomePage() {
           </div>
 
           {trainingView === "latest" ? (
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
               <div className="sm:col-span-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                 <div className="flex items-center gap-2 text-sm font-bold text-white">
                   <Footprints className="h-4 w-4 text-emerald-400" />
@@ -463,6 +466,10 @@ export default function HomePage() {
                 icon={<Heart className="h-3.5 w-3.5 text-rose-400" />}
               />
               <StatBlock label="Pace" value={LATEST_ACTIVITY.pace} />
+              <StatBlock
+                label="Calories"
+                value={`${LATEST_ACTIVITY.calories} kcal`}
+              />
             </div>
           ) : (
             <div className="h-[260px] w-full">
