@@ -1,10 +1,13 @@
 /**
- * The training page talks to this interface only. It is backed by fixtures today; when the
- * backend routes exist, replace `mockTrainingApi` with a fetch-based implementation
- * (see lib/api.ts for the request/auth pattern) and nothing else needs to change.
+ * The training page talks to this interface only. Two implementations sit behind it:
+ * the FastAPI service (http-api.ts) and in-memory fixtures (mock-api.ts).
+ *
+ * Set NEXT_PUBLIC_TRAINING_API=http to use the backend. Anything else uses the fixtures, so the
+ * page still works without a backend or a signed-in user.
  *
  * Reads throw on failure; writes return an ApiResult so the UI can show the reason.
  */
+import { httpTrainingApi } from "./http-api";
 import { mockTrainingApi } from "./mock-api";
 import type { MoveRefusalCode } from "./rules";
 import type { LogWorkoutInput, TrainingPreferencesInput } from "./schemas";
@@ -27,6 +30,10 @@ export type ApiErrorCode =
   | "PLAN_ENDED"
   | "NOT_FOUND"
   | "INVALID_STATE"
+  | "UNAUTHORIZED"
+  | "NOT_CONFIGURED"
+  | "NETWORK"
+  | "SERVER_ERROR"
   | MoveRefusalCode;
 
 export interface ApiError {
@@ -78,4 +85,5 @@ export interface TrainingApi {
   logAdHocSession(input: LogWorkoutInput): Promise<ApiResult<LogResult>>;
 }
 
-export const trainingApi: TrainingApi = mockTrainingApi;
+export const trainingApi: TrainingApi =
+  process.env.NEXT_PUBLIC_TRAINING_API === "http" ? httpTrainingApi : mockTrainingApi;

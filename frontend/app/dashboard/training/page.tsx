@@ -73,8 +73,12 @@ export default function TrainingPage() {
   }, []);
 
   async function acknowledgeAdaptation() {
-    await trainingApi.acknowledgeAdaptation();
-    refresh();
+    try {
+      await trainingApi.acknowledgeAdaptation();
+      refresh();
+    } catch (e: unknown) {
+      showNotice(e instanceof Error ? e.message : "Couldn't dismiss that message");
+    }
   }
 
   const adaptation = plan?.lastAdaptation && !plan.lastAdaptation.acknowledged ? plan.lastAdaptation : null;
@@ -113,7 +117,7 @@ export default function TrainingPage() {
               <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-300" aria-hidden="true" />
               <div>
                 <p className="font-semibold">
-                  Your plan was adapted on {formatDay(adaptation.adaptedAt.slice(0, 10))}
+                  Your plan was adapted on {formatDay(adaptation.adaptedOn)}
                   <span className="font-normal text-sky-200"> · {TRIGGER_LABEL[adaptation.trigger]}</span>
                 </p>
                 <p className="mt-1 text-xs text-sky-200">{adaptation.reason}</p>

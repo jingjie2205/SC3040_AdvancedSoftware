@@ -30,6 +30,7 @@ export function RescheduleDialog({
   const [target, setTarget] = useState(session.date);
   const [planSessions, setPlanSessions] = useState<PlannedSession[] | null>(null);
   const [planLoadFailed, setPlanLoadFailed] = useState(false);
+  const [planVersion, setPlanVersion] = useState(0);
   const [serverRefusal, setServerRefusal] = useState<{
     message: string;
     suggestedDate: string | null;
@@ -37,7 +38,8 @@ export function RescheduleDialog({
   const [saving, setSaving] = useState(false);
 
   // The whole plan is loaded so the early warning also sees neighbours in adjacent weeks.
-  // If it can't load, the server still checks the move.
+  // If it can't load, the server still checks the move. A server refusal means our copy is
+  // out of date, so it is loaded again.
   useEffect(() => {
     let cancelled = false;
     trainingApi
@@ -51,7 +53,7 @@ export function RescheduleDialog({
     return () => {
       cancelled = true;
     };
-  }, [plan.startDate, plan.endDate]);
+  }, [plan.startDate, plan.endDate, planVersion]);
 
   const check = useMemo(
     () =>
@@ -88,6 +90,7 @@ export function RescheduleDialog({
         message: result.error.message,
         suggestedDate: result.error.suggestedDate ?? null,
       });
+      setPlanVersion((v) => v + 1);
       return;
     }
     onMoved(`Session moved to ${formatDay(target)}`);

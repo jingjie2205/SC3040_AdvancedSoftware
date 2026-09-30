@@ -27,6 +27,8 @@ export interface PlanAdaptation {
   trigger: "missed_sessions" | "low_readiness" | "manual";
   reason: string;
   adaptedAt: string;
+  /** The user's local date when it happened, as "YYYY-MM-DD". */
+  adaptedOn: string;
   acknowledged: boolean;
 }
 

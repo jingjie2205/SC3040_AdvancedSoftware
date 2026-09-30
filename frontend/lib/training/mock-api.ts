@@ -356,6 +356,7 @@ export const mockTrainingApi: TrainingApi = {
     plan.lastAdaptation = {
       trigger: "manual",
       adaptedAt: new Date().toISOString(),
+      adaptedOn: today,
       acknowledged: false,
       reason: baseline.usedDefault
         ? `You have fewer than ${R.minHistoryWeeksForBaseline} weeks of completed training in the last 4 weeks, so a conservative default of ${baseline.volume} pts/week was used. Only the remaining ${remainingWeeks} week(s) were regenerated.`
