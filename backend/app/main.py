@@ -9,6 +9,7 @@ import jwt
 from pydantic import BaseModel
 from .coach import RecommendationSchema, synthesize_recommendation
 from .config import get_settings
+from .training import install as install_training_routes
 from .worker import enqueue_activity_job, get_supabase_admin, process_activity_pipeline, run_worker_loop
 
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +54,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+install_training_routes(app)
 
 
 def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
