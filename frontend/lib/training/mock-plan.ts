@@ -3,7 +3,7 @@
  * so the UI has something realistic to render. Not the source of truth for any rule.
  */
 import { TRAINING_RULES as R } from "./config";
-import { addDays, startOfWeek } from "./dates";
+import { addDays, diffDays, startOfWeek } from "./dates";
 import type { TrainingPreferencesInput } from "./schemas";
 import { WEEKDAYS } from "./types";
 import type { IntensityBand, PlannedSession, WorkoutSession } from "./types";
@@ -21,10 +21,14 @@ export interface Baseline {
   usedDefault: boolean;
 }
 
-/** Mean weekly volume over the 4 weeks before `asOf`, counting only weeks with completed training. */
+/**
+ * Mean weekly volume over the last few complete weeks before the week containing `asOf`,
+ * counting only weeks with training. Whole weeks are used so no week is cut in half.
+ */
 export function baselineFromHistory(workouts: WorkoutSession[], asOf: string): Baseline {
-  const from = addDays(asOf, -28);
-  const recent = workouts.filter((w) => w.date >= from && w.date < asOf);
+  const end = startOfWeek(asOf);
+  const from = addDays(end, -7 * R.baselineWindowWeeks);
+  const recent = workouts.filter((w) => w.date >= from && w.date < end);
   const weeks = new Set(recent.map((w) => startOfWeek(w.date)));
   if (weeks.size < R.minHistoryWeeksForBaseline) {
     return { volume: R.defaultBaselineVolume, sessionCount: recent.length, usedDefault: true };
@@ -88,21 +92,29 @@ export function buildSessions({ prefs, startDate, targets, fromDate }: BuildArgs
   if (perWeek === 0) return [];
 
   const drafts: SessionDraft[] = [];
+  // Every third session is a push, and a push never follows another on the next day, even across weeks.
+  let lastPush: string | null = null;
   targets.forEach((target, week) => {
     const weekStart = addDays(startDate, week * 7);
-    const slots = Array.from({ length: perWeek }, (_, i) => ({
+    const unbanded = Array.from({ length: perWeek }, (_, i) => ({
       order: i,
       date: addDays(weekStart, available[Math.floor((i * available.length) / perWeek)]),
     })).filter((slot) => slot.date >= fromDate);
-    if (slots.length === 0) return;
+    if (unbanded.length === 0) return;
 
-    const bandFor = (order: number): IntensityBand =>
-      target.deload ? "deload" : order % 3 === 0 ? "push" : "light";
-    const weightTotal = slots.reduce((sum, s) => sum + BAND_WEIGHT[bandFor(s.order)], 0);
+    const slots = unbanded.map((slot) => {
+      let band: IntensityBand = target.deload ? "deload" : slot.order % 3 === 0 ? "push" : "light";
+      if (band === "push") {
+        if (lastPush !== null && diffDays(slot.date, lastPush) <= 1) band = "light";
+        else lastPush = slot.date;
+      }
+      return { ...slot, band };
+    });
+    const weightTotal = slots.reduce((sum, s) => sum + BAND_WEIGHT[s.band], 0);
     const weekVolume = (target.volume * slots.length) / perWeek;
 
     for (const slot of slots) {
-      const band = bandFor(slot.order);
+      const band = slot.band;
       drafts.push({
         date: slot.date,
         activityType: prefs.activityTypes[(slot.order + week) % prefs.activityTypes.length],

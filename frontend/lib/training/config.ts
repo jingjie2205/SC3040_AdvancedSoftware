@@ -10,6 +10,7 @@ export const TRAINING_RULES = {
   deloadVolumeFactor: 0.7,
   weeklyProgressionPct: 5,
   maxWeeklyIncreasePct: 10,
+  baselineWindowWeeks: 4,
   minHistoryWeeksForBaseline: 2,
   defaultBaselineVolume: 100,
   partialCompletionRatio: 0.8,

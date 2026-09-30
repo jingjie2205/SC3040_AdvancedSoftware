@@ -285,7 +285,7 @@ export const mockTrainingApi: TrainingApi = {
       return fail("PLAN_EXISTS", "You already have an active plan. Confirm to replace it.");
     }
 
-    const baseline = baselineFromHistory(s.workouts, addDays(today, 1));
+    const baseline = baselineFromHistory(s.workouts, today);
     const targets = weeklyTargets(baseline.volume, parsed.data.weeks);
     const unsafeWeek = firstUnsafeWeek(targets);
     if (unsafeWeek !== -1) {
@@ -335,7 +335,7 @@ export const mockTrainingApi: TrainingApi = {
     }
 
     // Rebaseline on what was actually completed, never on what was planned.
-    const baseline = baselineFromHistory(s.workouts, addDays(today, 1));
+    const baseline = baselineFromHistory(s.workouts, today);
     const monday = startOfWeek(today);
     const weeksElapsed = diffDays(monday, plan.startDate) / 7;
     const remainingWeeks = plan.weeks - weeksElapsed;
