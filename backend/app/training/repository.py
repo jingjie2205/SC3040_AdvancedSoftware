@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from supabase import Client, create_client
 
-from ..config import get_settings
+from ..commons.config import get_settings
 from .errors import TrainingError
 from .models import (
     PlannedSession,

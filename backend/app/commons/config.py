@@ -11,11 +11,8 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
 
     # Supabase (PostgreSQL & Auth)
-    NEXT_PUBLIC_SUPABASE_URL: str = ""
-    SUPABASE_URL: str = ""
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: str = ""
-    SUPABASE_ANON_KEY: str = ""
-    SUPABASE_SERVICE_ROLE_KEY: str = ""
+    SUPABASE_URL: str
+    SUPABASE_SERVICE_ROLE_KEY: str
     SUPABASE_JWT_SECRET: str = ""
 
     # Redis Queue
@@ -38,11 +35,11 @@ class Settings(BaseSettings):
 
     @property
     def effective_supabase_url(self) -> str:
-        return self.SUPABASE_URL or self.NEXT_PUBLIC_SUPABASE_URL
+        return self.SUPABASE_URL
 
     @property
     def effective_supabase_key(self) -> str:
-        return self.SUPABASE_SERVICE_ROLE_KEY or self.SUPABASE_ANON_KEY or self.NEXT_PUBLIC_SUPABASE_ANON_KEY
+        return self.SUPABASE_SERVICE_ROLE_KEY
 
 
 @lru_cache

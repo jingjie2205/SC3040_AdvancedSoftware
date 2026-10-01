@@ -11,7 +11,7 @@ from uuid import UUID
 import jwt
 from fastapi import Header, HTTPException
 
-from ..config import get_settings
+from ..commons.config import get_settings
 
 
 def _error(status: int, code: str, message: str) -> HTTPException:

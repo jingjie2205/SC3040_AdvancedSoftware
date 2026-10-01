@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import "./globals.css";
+import "./assets/globals.css";
 
 export const metadata: Metadata = {
   title: "EnduranceAI — AI-Driven Endurance & Recovery",
