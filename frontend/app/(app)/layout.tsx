@@ -9,7 +9,16 @@ import {
   Apple,
   Sparkles,
   Trophy,
+  User,
 } from "lucide-react";
+
+// Mock data for now
+const mockUser: { name: string; email: string; image: string | null } = {
+  name: "John Doe",
+  email: "john.doe@example.com",
+  image: "https://i.pravatar.cc/200?img=13", // set to null to test the default icon, using pravatar for mock avatars. /200 = resolution?img=number
+  //image: null, // set to null to test the default icon
+};
 
 export default function DashboardLayout({
   children,
@@ -17,6 +26,7 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const user = mockUser;
 
   const navItems = [
     { name: "Home", href: "/dashboard", icon: Home },
@@ -31,6 +41,7 @@ export default function DashboardLayout({
       {/* Top Navigation Bar */}
       <header className="sticky top-0 z-30 border-b border-slate-800/80 bg-[#060913]/90 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8 h-16">
+          {/* Left: logo + nav */}
           <div className="flex items-center gap-8">
             <Link href="/" className="flex items-center gap-2.5">
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-400 to-teal-600 text-black shadow-md shadow-emerald-500/20">
@@ -63,8 +74,28 @@ export default function DashboardLayout({
                 );
               })}
             </nav>
-            <div className="ml-auto">
-              <p className="text-slate-200">Welcome Back, User</p>
+          </div>
+
+          {/* Right: welcome message + user icon */}
+          <div className="flex items-center gap-3">
+            <p className="hidden sm:block text-sm text-slate-200">
+              Welcome back,{" "}
+              <span className="font-semibold text-white">{user.name}</span>
+            </p>
+            <div
+              className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-slate-700 bg-slate-800 text-emerald-400"
+              title={user.email}
+            >
+              {user.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={user.image}
+                  alt={user.name}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <User className="h-4 w-4" />
+              )}
             </div>
           </div>
         </div>
