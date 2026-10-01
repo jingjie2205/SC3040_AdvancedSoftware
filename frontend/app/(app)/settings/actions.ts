@@ -39,3 +39,28 @@ export async function updateProfileMetrics(formData: {
 
   return await res.json();
 }
+
+export async function disconnectStrava() {
+  const supabase = await createClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (!session) {
+    throw new Error("Unauthorized");
+  }
+
+  const res = await fetch("http://localhost:8000/strava/disconnect", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to disconnect Strava");
+  }
+
+  // Invalidates the cached user profile so the UI instantly resets
+  revalidateTag("user-profile");
+}

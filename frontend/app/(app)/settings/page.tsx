@@ -10,6 +10,7 @@ import {
   Unplug
 } from "lucide-react";
 import ProfileForm from "./ProfileForm";
+import { disconnectStrava } from "./actions";
 
 export default async function SettingsPage({
   searchParams,
@@ -126,22 +127,17 @@ export default async function SettingsPage({
                         <CheckCircle2 className="h-5 w-5 text-emerald-400" />
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-slate-200">
-                          Account Linked
-                        </p>
+                        <p className="text-sm font-medium text-slate-200">Account Linked</p>
                         <p className="text-xs text-slate-500">Telemetry sync is active</p>
                       </div>
                     </div>
-                    
-                    <form action={async () => {
-                      "use server";
-                      await fetch("http://localhost:8000/users/strava/disconnect", {
-                        method: "POST",
-                        headers: { Authorization: `Bearer ${session.access_token}` }
-                      });
-                      redirect("/settings?tab=integrations");
-                    }}>
-                      <button type="submit" className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-2 text-xs font-medium text-slate-300 transition hover:bg-slate-800 hover:text-red-400 hover:border-red-900/50">
+
+                    {/* Native Server Action form - no extra components or toast logic needed */}
+                    <form action={disconnectStrava}>
+                      <button
+                        type="submit"
+                        className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-2 text-xs font-medium text-slate-300 transition hover:bg-slate-800 hover:text-red-400 hover:border-red-900/50"
+                      >
                         <Unplug className="h-3.5 w-3.5" />
                         Disconnect
                       </button>

@@ -4,8 +4,6 @@ import httpx
 from pydantic import BaseModel
 from ..commons.config import get_settings
 from fastapi import HTTPException, status
-from app.services.strava import refresh_strava_token
-from app.commons.auth.deps import get_supabase_admin
 
 
 class StravaTokenResponse(BaseModel):
