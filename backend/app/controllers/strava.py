@@ -67,14 +67,14 @@ def get_strava_token(authorization: Optional[str] = Header(None)) -> str:
 
 @router.get("/athlete")
 async def get_athlete(authorization: Optional[str] = Header(None)):
-    token = get_strava_token(authorization)
+    token = await check_valid_strava_token(user_id)
     return await strava_service.fetch_strava_athlete(token)
 
 @router.get("/activities")
 async def get_activities(
     page: int = Query(1, ge=1), 
-    per_page: int = Query(10, ge=1, le=50), 
-    authorization: Optional[str] = Header(None)
+    per_page: int = Query(10, ge=1, le=50),
+    user_id: str = Depends(get_current_user_id),
 ):
-    token = get_strava_token(authorization)
+    token = await check_valid_strava_token(user_id)
     return await strava_service.fetch_strava_activities(token, page, per_page)
