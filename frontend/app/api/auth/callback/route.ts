@@ -1,46 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exchangeStravaToken } from "@/lib/strava";
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
+  const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const error = searchParams.get("error");
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const baseUrl = request.nextUrl.origin;
 
   if (error || !code) {
-    return NextResponse.redirect(`${appUrl}/login?error=${encodeURIComponent(error || "missing_code")}`);
+    return NextResponse.redirect(`${baseUrl}/settings?tab=integrations&error=access_denied`);
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (!session) {
+    return NextResponse.redirect(`${baseUrl}/login`);
   }
 
   try {
-    const tokenData = await exchangeStravaToken(code);
-    const supabase = await createClient();
-    const adminSupabase = createAdminClient();
+    const response = await fetch("http://localhost:8000/strava/exchange", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ code }),
+    });
 
-    // Check existing auth session or user
-    const { data: { user } } = await supabase.auth.getUser();
-    const userId = user?.id || "00000000-0000-0000-0000-000000000001"; // Fallback demo user ID if running without full auth
-
-    if (tokenData.athlete?.id) {
-      await adminSupabase.from("athlete_profiles").upsert(
-        {
-          user_id: userId,
-          strava_athlete_id: tokenData.athlete.id,
-          strava_access_token: tokenData.access_token,
-          strava_refresh_token: tokenData.refresh_token,
-          strava_token_expires_at: tokenData.expires_at,
-          gender: tokenData.athlete.sex === "F" ? "female" : "male",
-          weight_kg: tokenData.athlete.weight || 70.0,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id" }
-      );
+    if (!response.ok) {
+      console.error("Token exchange failed:", await response.text());
+      return NextResponse.redirect(`${baseUrl}/settings?tab=integrations&error=exchange_failed`);
     }
-
-    return NextResponse.redirect(`${appUrl}/`);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "auth_failed";
-    return NextResponse.redirect(`${appUrl}/login?error=${encodeURIComponent(message)}`);
+  } catch (err) {
+    console.error("Backend connection error:", err);
+    return NextResponse.redirect(`${baseUrl}/settings?tab=integrations&error=server_error`);
   }
+
+  // 3. Return user to Settings page
+  return NextResponse.redirect(`${baseUrl}/settings?tab=integrations&connected=true`);
 }

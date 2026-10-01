@@ -1,34 +1,54 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Calculator, Save, User } from "lucide-react";
+import { Calculator, Save, Info, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { updateProfileMetrics } from "./actions";
 
-export default function ProfileForm() {
-  const [age, setAge] = useState<number>(25);
-  const [weight, setWeight] = useState<number>(70); // kg
-  const [height, setHeight] = useState<number>(175); // cm
-  const [sex, setSex] = useState<"male" | "female">("male");
+// GET /users/me
+interface ProfileFormProps {
+  initialData?: any; 
+}
+
+export default function ProfileForm({ initialData }: ProfileFormProps) {
+  const [age, setAge] = useState<number>(initialData?.age || 25);
+  const [weight, setWeight] = useState<number>(initialData?.weight || 70); // kg
+  const [height, setHeight] = useState<number>(initialData?.height || 175); // cm
   
-  const [activity, setActivity] = useState<number>(1.2);
-  const [goal, setGoal] = useState<number>(0);
+  const [sex, setSex] = useState<"MALE" | "FEMALE">(initialData?.biologicalSex || "MALE");
+  const [activityEnum, setActivityEnum] = useState<string>(initialData?.activityLevel || "SEDENTARY");
+  const [goalEnum, setGoalEnum] = useState<string>(initialData?.fitnessGoal || "MAINTAIN");
+
+  const [isSaving, setIsSaving] = useState(false);
+
+  const activityMultiplier: Record<string, number> = {
+    "SEDENTARY": 1.2,
+    "LIGHTLY_ACTIVE": 1.375,
+    "MODERATELY_ACTIVE": 1.55,
+    "VERY_ACTIVE": 1.725,
+    "EXTRA_ACTIVE": 1.9
+  };
+
+  const goalCalorieOffset: Record<string, number> = {
+    "DEFICIT": -500,
+    "MAINTAIN": 0,
+    "SURPLUS": 500
+  };
 
   // Mifflin-St Jeor Equation & Macro Calculations
   const stats = useMemo(() => {
-    // Calculate BMR
     let bmr = (10 * weight) + (6.25 * height) - (5 * age);
-    bmr = sex === "male" ? bmr + 5 : bmr - 161;
+    bmr = sex === "MALE" ? bmr + 5 : bmr - 161;
 
-    // Calculate TDEE
-    const tdee = bmr * activity;
+    const currentActivityMultiplier = activityMultiplier[activityEnum] || 1.2;
+    const currentGoalOffset = goalCalorieOffset[goalEnum] || 0;
 
-    // Apply Goal (Deficit = -500 kcal, Surplus = +500 kcal)
-    const targetCalories = tdee + goal;
+    const tdee = bmr * currentActivityMultiplier;
+    const targetCalories = tdee + currentGoalOffset;
 
-    // Calculate Macros (Endurance focused: 2g protein/kg, 1g fat/kg, rest carbs)
     const protein = weight * 2;
     const fats = weight * 1;
     
-    // Remaining calories for carbs (Protein = 4kcal/g, Fat = 9kcal/g, Carbs = 4kcal/g)
     const remainingKcal = targetCalories - (protein * 4) - (fats * 9);
     const carbs = Math.max(0, remainingKcal / 4);
 
@@ -40,7 +60,26 @@ export default function ProfileForm() {
       fats: Math.round(fats),
       carbs: Math.round(carbs),
     };
-  }, [age, weight, height, sex, activity, goal]);
+  }, [age, weight, height, sex, activityEnum, goalEnum]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await updateProfileMetrics({
+        age,
+        weight,
+        height,
+        biologicalSex: sex,
+        activityLevel: activityEnum,
+        fitnessGoal: goalEnum,
+      });
+      toast.success("Profile metrics updated successfully");
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to update profile metrics");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 backdrop-blur-sm">
@@ -56,6 +95,20 @@ export default function ProfileForm() {
         </div>
       </div>
 
+      <div className="mb-8 rounded-xl bg-slate-800/40 border border-slate-700/50 p-4">
+        <div className="flex gap-3">
+          <Info className="h-5 w-5 text-emerald-500 shrink-0 mt-0.5" />
+          <div className="space-y-2 text-sm text-slate-300">
+            <p>
+              <strong className="text-emerald-400 font-semibold">Basal Metabolic Rate (BMR)</strong> is the baseline number of calories your body needs to maintain basic life functions (like breathing and circulation) while at complete rest.
+            </p>
+            <p>
+              <strong className="text-emerald-400 font-semibold">Total Daily Energy Expenditure (TDEE)</strong> multiplies your BMR by your daily activity level to estimate the total calories you burn in a day. We use this to calculate your target macronutrients.
+            </p>
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Input Form */}
         <div className="space-y-4">
@@ -66,9 +119,9 @@ export default function ProfileForm() {
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-slate-400">Sex</label>
-              <select value={sex} onChange={(e) => setSex(e.target.value as "male" | "female")} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-emerald-500 outline-none">
-                <option value="male">Male</option>
-                <option value="female">Female</option>
+              <select value={sex} onChange={(e) => setSex(e.target.value as "MALE" | "FEMALE")} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-emerald-500 outline-none">
+                <option value="MALE">Male</option>
+                <option value="FEMALE">Female</option>
               </select>
             </div>
             <div className="space-y-1.5">
@@ -83,27 +136,31 @@ export default function ProfileForm() {
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-slate-400">Activity Level</label>
-            <select value={activity} onChange={(e) => setActivity(Number(e.target.value))} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-emerald-500 outline-none">
-              <option value={1.2}>Sedentary (Little to no exercise)</option>
-              <option value={1.375}>Lightly Active (1-3 days/week)</option>
-              <option value={1.55}>Moderately Active (3-5 days/week)</option>
-              <option value={1.725}>Very Active (6-7 days/week)</option>
-              <option value={1.9}>Extra Active (Physical job + training)</option>
+            <select value={activityEnum} onChange={(e) => setActivityEnum(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-emerald-500 outline-none">
+              <option value="SEDENTARY">Sedentary (Little to no exercise)</option>
+              <option value="LIGHTLY_ACTIVE">Lightly Active (1-3 days/week)</option>
+              <option value="MODERATELY_ACTIVE">Moderately Active (3-5 days/week)</option>
+              <option value="VERY_ACTIVE">Very Active (6-7 days/week)</option>
+              <option value="EXTRA_ACTIVE">Extra Active (Physical job + training)</option>
             </select>
           </div>
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-slate-400">Fitness Goal</label>
-            <select value={goal} onChange={(e) => setGoal(Number(e.target.value))} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-emerald-500 outline-none">
-              <option value={-500}>Deficit (-500 kcal for Weight Loss)</option>
-              <option value={0}>Maintenance (Maintain Weight)</option>
-              <option value={500}>Surplus (+500 kcal for Muscle Gain)</option>
+            <select value={goalEnum} onChange={(e) => setGoalEnum(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-emerald-500 outline-none">
+              <option value="DEFICIT">Deficit (-500 kcal for Weight Loss)</option>
+              <option value="MAINTAIN">Maintenance (Maintain Weight)</option>
+              <option value="SURPLUS">Surplus (+500 kcal for Muscle Gain)</option>
             </select>
           </div>
           
-          <button className="w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500 mt-2">
-            <Save className="h-4 w-4" />
-            Save Profile Metrics
+          <button 
+            onClick={handleSave}
+            disabled={isSaving}
+            className="w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500 mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {isSaving ? "Saving..." : "Save Profile Metrics"}
           </button>
         </div>
 

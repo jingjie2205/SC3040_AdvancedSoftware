@@ -3,8 +3,6 @@ from typing import Any
 from app.models.users import UserResponse, UserUpdate
 from app.commons.auth.deps import get_current_user_id, get_supabase_admin
 
-# The prefix "/users" can be handled here or in main.py. 
-# We explicitly define the routes here based on your previous setup.
 router = APIRouter(tags=["Users"])
 
 @router.get("/users/me", response_model=UserResponse)
@@ -33,7 +31,8 @@ async def get_my_profile(
         "activityLevel": data.get("activity_level"),
         "fitnessGoal": data.get("fitness_goal"),
         "userId": data["user_id"],
-        "createdAt": data["created_at"]
+        "createdAt": data["created_at"],
+        "isStravaConnected": bool(data.get("strava_access_token")) 
     }
 
 @router.put("/users/me", response_model=UserResponse)
@@ -77,5 +76,6 @@ async def update_my_profile(
         "activityLevel": data.get("activity_level"),
         "fitnessGoal": data.get("fitness_goal"),
         "userId": data["user_id"],
-        "createdAt": data["created_at"]
+        "createdAt": data["created_at"],
+        "isStravaConnected": bool(data.get("strava_access_token"))
     }

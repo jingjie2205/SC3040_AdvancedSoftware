@@ -19,29 +19,25 @@ export default async function SettingsPage({
   // Await searchParams (required in Next.js 15) to determine the active tab
   const resolvedSearchParams = await searchParams;
   const activeTab = resolvedSearchParams.tab || "profile";
-7
+
   // Secure Authentication Check
-  // const supabase = await createClient();
-  // const { data: { session } } = await supabase.auth.getSession();
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
   
-  // if (!session) {
-  //   redirect("/login");
-  // }
+  if (!session) {
+    redirect("/login");
+  }
 
-  // Fetch User Profile for Strava Status
-  // const profileRes = await fetch("http://localhost:8000/api/v1/users/me", {
-  //   headers: {
-  //     Authorization: `Bearer ${session.access_token}`,
-  //   },
-  //   next: { tags: ['user-profile'] } 
-  // });
+  const profileRes = await fetch("http://localhost:8000/users/me", {
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    next: { tags: ['user-profile'] } 
+  });
   
-  // const userProfile = profileRes.ok ? await profileRes.json() : null;
-  // const isStravaConnected = !!userProfile?.stravaAthleteId;
-
-  // FOR TESTING PURPOSES
-  const isStravaConnected = true
-  const userProfile = true
+  const userProfile = profileRes.ok ? await profileRes.json() : null;
+  
+  const isStravaConnected = !!userProfile?.isStravaConnected;
 
   const clientId = process.env.NEXT_PUBLIC_STRAVA_CLIENT_ID; 
   const redirectUri = process.env.NEXT_PUBLIC_STRAVA_REDIRECT_URI;
@@ -92,8 +88,8 @@ export default async function SettingsPage({
         {/* Settings Content Area */}
         <div className="md:col-span-2 space-y-6">
           
-          {/* TDEE Profile Engine Component */}
-          {activeTab === "profile" && <ProfileForm />}
+          {/* pass user data for rendering */}
+          {activeTab === "profile" && <ProfileForm initialData={userProfile} />}
           
           {/* Strava Integration Card */}
           {activeTab === "integrations" && (
@@ -126,21 +122,20 @@ export default async function SettingsPage({
                 {isStravaConnected ? (
                   <div className="flex items-center justify-between flex-wrap gap-4">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-800 border border-slate-700">
-                        <User className="h-5 w-5 text-slate-400" />
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                        <CheckCircle2 className="h-5 w-5 text-emerald-400" />
                       </div>
                       <div>
                         <p className="text-sm font-medium text-slate-200">
-                          {userProfile?.stravaFirstName || "Strava Athlete"}
+                          Account Linked
                         </p>
-                        <p className="text-xs text-slate-500">ID: {userProfile?.stravaAthleteId}</p>
+                        <p className="text-xs text-slate-500">Telemetry sync is active</p>
                       </div>
                     </div>
                     
                     <form action={async () => {
                       "use server";
-                      // Note: This requires a POST /api/v1/strava/disconnect endpoint in FastAPI
-                      await fetch("http://localhost:8000/api/v1/strava/disconnect", {
+                      await fetch("http://localhost:8000/users/strava/disconnect", {
                         method: "POST",
                         headers: { Authorization: `Bearer ${session.access_token}` }
                       });
