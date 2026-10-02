@@ -38,7 +38,7 @@ failures use the same shape (status 422), including request-body validation on t
 | `readiness.py` | Feature builder and the `ReadinessScorer` interface with the rule-based scorer |
 | `service.py` | Application logic. Takes `user_id` and `today` from the caller |
 | `repository.py` | Supabase access and the `ChangeSet` applied in one transaction |
-| `auth.py` | Strict JWT check and the client-date header |
+| `clock.py` | The client-date header ("today" as the user sees it) |
 | `router.py` | Routes, plus `install(app)` |
 
 ## Turning it on against a real Supabase project
@@ -58,12 +58,12 @@ failures use the same shape (status 422), including request-body validation on t
           has_function_privilege('service_role', 'public.training_apply_changes(uuid, jsonb)', 'execute') as service_role;
    -- expect false, false, true
    ```
-3. **Backend environment** (already in `.env.example`):
+3. **Backend environment** (`backend/.env`):
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY` (server only; never a `NEXT_PUBLIC_` variable)
-   - `SUPABASE_JWT_SECRET`. Tokens are verified as HS256 with audience `authenticated`, the same as the
-     existing code. If the project has moved to asymmetric signing keys, this needs revisiting.
-   Without these the routes answer 503 `NOT_CONFIGURED` instead of guessing.
+   Who the caller is comes from the team's shared `get_current_user_id`
+   (`app/commons/auth/deps.py`): it asks Supabase Auth to resolve the bearer token, so no JWT secret is
+   needed here. A missing, malformed or unrecognised token is a 401.
 4. **Frontend**: set `NEXT_PUBLIC_TRAINING_API=http` (and `NEXT_PUBLIC_BACKEND_URL` if it isn't
    `http://localhost:8000`). Without the flag the page runs on in-memory fixtures.
 5. **Smoke test** with a real access token:

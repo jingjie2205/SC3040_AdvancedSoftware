@@ -31,7 +31,6 @@ export type ApiErrorCode =
   | "NOT_FOUND"
   | "INVALID_STATE"
   | "UNAUTHORIZED"
-  | "NOT_CONFIGURED"
   | "NETWORK"
   | "SERVER_ERROR"
   | MoveRefusalCode;

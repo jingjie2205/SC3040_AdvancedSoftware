@@ -8,13 +8,11 @@ single Postgres function in one transaction, so a failure never leaves a partial
 """
 from dataclasses import dataclass, field
 from datetime import date
-from functools import lru_cache
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
-from supabase import Client, create_client
+from supabase import Client
 
-from ..commons.config import get_settings
-from .errors import TrainingError
+from ..commons.auth.deps import get_supabase_admin
 from .models import (
     PlannedSession,
     ReadinessScore,
@@ -173,18 +171,5 @@ class SupabaseTrainingRepository:
         ).execute()
 
 
-@lru_cache
-def _service_client() -> Client:
-    settings = get_settings()
-    url = settings.effective_supabase_url
-    key = settings.SUPABASE_SERVICE_ROLE_KEY
-    if not url or not key:
-        raise TrainingError(
-            "NOT_CONFIGURED",
-            "The training data store isn't configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
-        )
-    return create_client(url, key)
-
-
 def create_repository() -> SupabaseTrainingRepository:
-    return SupabaseTrainingRepository(_service_client())
+    return SupabaseTrainingRepository(get_supabase_admin())

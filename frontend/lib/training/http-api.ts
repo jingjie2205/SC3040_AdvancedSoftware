@@ -48,8 +48,12 @@ async function readError(response: Response): Promise<ApiError> {
       suggestedDate: typeof detail.suggestedDate === "string" ? detail.suggestedDate : null,
     };
   }
+  if (response.status === 401) {
+    // The shared auth dependency answers with a plain-string body, which isn't something to show.
+    return { code: "UNAUTHORIZED", message: "Your session has expired. Sign in again." };
+  }
   return {
-    code: response.status === 401 ? "UNAUTHORIZED" : "SERVER_ERROR",
+    code: "SERVER_ERROR",
     message:
       typeof detail === "string" ? detail : `The server returned an error (${response.status}).`,
   };

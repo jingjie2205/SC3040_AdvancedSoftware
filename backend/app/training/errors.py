@@ -18,7 +18,6 @@ ErrorCode = Literal[
     "OUT_OF_PLAN",
     "DAY_OCCUPIED",
     "CONSECUTIVE_HIGH_INTENSITY",
-    "NOT_CONFIGURED",
 ]
 
 _STATUS: Dict[str, int] = {
@@ -26,7 +25,6 @@ _STATUS: Dict[str, int] = {
     "PLAN_UNSAFE": 422,
     "NO_PLAN": 404,
     "NOT_FOUND": 404,
-    "NOT_CONFIGURED": 503,
 }
 
 

@@ -8,7 +8,8 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .auth import get_client_date, require_user_id
+from ..commons.auth.deps import get_current_user_id
+from .clock import get_client_date
 from .models import (
     GeneratePlanRequest,
     LogResult,
@@ -44,7 +45,7 @@ def get_service() -> TrainingService:
     return _default_service()
 
 
-UserId = Annotated[str, Depends(require_user_id)]
+UserId = Annotated[str, Depends(get_current_user_id)]
 Today = Annotated[date, Depends(get_client_date)]
 Service = Annotated[TrainingService, Depends(get_service)]
 

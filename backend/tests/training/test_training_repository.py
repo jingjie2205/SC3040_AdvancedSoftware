@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.training.errors import TrainingError
 from app.training import repository
 from app.training.models import (
     PlannedSession,
@@ -209,11 +208,7 @@ def test_an_empty_change_set_has_the_expected_empty_shape():
 # ------------------------------------------------------------------ configuration
 
 
-def test_without_service_credentials_the_repository_refuses_instead_of_falling_back(monkeypatch):
-    repository._service_client.cache_clear()
-    monkeypatch.setattr(repository, "get_settings", lambda: SimpleNamespace(
-        effective_supabase_url="https://x.supabase.co", SUPABASE_SERVICE_ROLE_KEY=""))
-    with pytest.raises(TrainingError) as raised:
-        repository.create_repository()
-    assert raised.value.code == "NOT_CONFIGURED" and raised.value.status_code == 503
-    repository._service_client.cache_clear()
+def test_the_repository_is_built_on_the_shared_supabase_admin_client(monkeypatch):
+    client = object()
+    monkeypatch.setattr(repository, "get_supabase_admin", lambda: client)
+    assert repository.create_repository().db is client

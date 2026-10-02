@@ -1,22 +1,22 @@
 import re
-import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Dict, Iterator, Optional
 
-import jwt
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from app.training import auth
-from app.training.auth import get_client_date
+from app.commons.auth import deps
+from app.commons.auth.deps import get_current_user_id
+from app.training.clock import get_client_date
 from app.training.readiness import RuleBasedScorer
-from app.training.router import get_service, install
+from app.training.router import TRAINING_PREFIX, get_service, install, readiness_router, router
 from app.training.service import TrainingService
 from training_fakes import TODAY, USER_A, USER_B, FakeTrainingRepository, seed_history
 
-SECRET = "test-secret-that-is-comfortably-longer-than-32-bytes"
 PREFS = {
     "daysPerWeek": 4,
     "sessionDurationMin": 45,
@@ -25,14 +25,35 @@ PREFS = {
 }
 
 
-def token_for(user: str = USER_A, **overrides) -> str:
-    claims = {"sub": user, "aud": "authenticated", "exp": int(time.time()) + 3600}
-    claims.update(overrides)
-    return jwt.encode({k: v for k, v in claims.items() if v is not None}, SECRET, algorithm="HS256")
+class FakeSupabaseAuth:
+    """
+    Stands in for Supabase Auth behind the shared `get_current_user_id`, so these tests run the real
+    dependency end to end. Like the real client, it raises for a token it doesn't recognise.
+    """
+
+    def __init__(self, sessions: Dict[str, Optional[str]]) -> None:
+        self.sessions = sessions
+
+    def get_user(self, token: str):
+        if token not in self.sessions:
+            raise RuntimeError("invalid JWT")
+        user_id = self.sessions[token]
+        return SimpleNamespace(user=SimpleNamespace(id=user_id) if user_id else None)
+
+
+def token_for(user: str = USER_A) -> str:
+    return f"access-token-for-{user}"
 
 
 def headers(user: str = USER_A) -> dict:
     return {"Authorization": f"Bearer {token_for(user)}"}
+
+
+@pytest.fixture
+def supabase_auth(monkeypatch) -> FakeSupabaseAuth:
+    fake = FakeSupabaseAuth({token_for(USER_A): USER_A, token_for(USER_B): USER_B})
+    monkeypatch.setattr(deps, "get_supabase_admin", lambda: SimpleNamespace(auth=fake))
+    return fake
 
 
 @pytest.fixture
@@ -41,8 +62,7 @@ def repo() -> FakeTrainingRepository:
 
 
 @pytest.fixture
-def app(repo, monkeypatch) -> FastAPI:
-    monkeypatch.setattr(auth, "get_settings", lambda: SimpleNamespace(SUPABASE_JWT_SECRET=SECRET))
+def app(repo, supabase_auth) -> FastAPI:
     application = FastAPI()
     install(application)
     service = TrainingService(repo, RuleBasedScorer())
@@ -66,50 +86,50 @@ def generate(client, weeks: int = 8, user: str = USER_A, confirm: bool = False):
 
 
 # ------------------------------------------------------------------ authentication
+# Identity comes from the team's shared `get_current_user_id`, where Supabase verifies the token. So
+# these tests cover that every route is behind it and that only its answer decides whose data is served.
+
+
+def _dependency_calls(dependant) -> Iterator:
+    for sub in dependant.dependencies:
+        yield sub.call
+        yield from _dependency_calls(sub)
+
+
+def test_every_training_and_readiness_route_sits_behind_the_shared_auth_dependency():
+    routes = [route for mounted in (router, readiness_router) for route in mounted.routes if isinstance(route, APIRoute)]
+    assert len(routes) >= 10, "the route filter matched almost nothing"
+    unguarded = [route.path for route in routes if get_current_user_id not in _dependency_calls(route.dependant)]
+    assert unguarded == []
 
 
 @pytest.mark.parametrize("path", ["/preferences", "/plan", "/today", "/schedule?from=2026-09-28&to=2026-10-04"])
 def test_every_route_needs_a_token(client, path):
-    assert client.get(f"/api/v1/training{path}").status_code == 401
+    # FastAPI's HTTPBearer answers 403 on older releases and 401 on newer ones when the header is absent.
+    assert client.get(f"{TRAINING_PREFIX}{path}").status_code in (401, 403)
 
 
-@pytest.mark.parametrize("bad", [
-    "Bearer not-a-jwt",
-    "Basic abc",
-    "Bearer " + jwt.encode({"sub": USER_A, "aud": "authenticated", "exp": int(time.time()) + 60}, "wrong-secret-that-is-also-long-enough-xx", algorithm="HS256"),
-])
-def test_bad_credentials_are_rejected(client, bad):
-    response = client.get("/api/v1/training/preferences", headers={"Authorization": bad})
-    assert response.status_code == 401 and response.json()["detail"]["code"] == "UNAUTHORIZED"
+@pytest.mark.parametrize("bad", ["Basic abc", "Bearer", ""])
+def test_a_malformed_authorization_header_is_rejected(client, bad):
+    response = client.get(f"{TRAINING_PREFIX}/preferences", headers={"Authorization": bad})
+    assert response.status_code in (401, 403)
 
 
-def test_an_unsigned_token_is_rejected():
-    """The existing dashboard auth accepts these when no secret is set. These routes never do."""
-    forged = jwt.encode({"sub": USER_B, "aud": "authenticated", "exp": int(time.time()) + 60}, None, algorithm="none")
-    application = FastAPI()
-    install(application)
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(auth, "get_settings", lambda: SimpleNamespace(SUPABASE_JWT_SECRET=SECRET))
-        response = TestClient(application).get("/api/v1/training/preferences", headers={"Authorization": f"Bearer {forged}"})
+def test_a_token_supabase_does_not_recognise_is_rejected_and_nothing_is_written(client, repo):
+    """Forged, expired and wrong-audience tokens all look like this: Supabase refuses to resolve them."""
+    response = client.post(
+        f"{TRAINING_PREFIX}/plan",
+        json={"weeks": 4, "confirmReplace": False},
+        headers={"Authorization": "Bearer forged-or-expired"},
+    )
     assert response.status_code == 401
+    assert repo.plans == {}
 
 
-@pytest.mark.parametrize("claims", [
-    {"exp": int(time.time()) - 10},
-    {"aud": "someone-else"},
-    {"exp": None},
-    {"sub": None},
-    {"sub": "not-a-uuid"},
-])
-def test_expired_wrong_audience_and_malformed_claims_are_rejected(client, claims):
-    response = client.get("/api/v1/training/preferences", headers={"Authorization": f"Bearer {token_for(**claims)}"})
+def test_a_token_that_resolves_to_no_user_is_rejected(client, supabase_auth):
+    supabase_auth.sessions["orphan"] = None
+    response = client.get(f"{TRAINING_PREFIX}/preferences", headers={"Authorization": "Bearer orphan"})
     assert response.status_code == 401
-
-
-def test_without_a_configured_secret_the_routes_fail_closed(client, monkeypatch):
-    monkeypatch.setattr(auth, "get_settings", lambda: SimpleNamespace(SUPABASE_JWT_SECRET=""))
-    response = client.get("/api/v1/training/preferences", headers=headers())
-    assert response.status_code == 503 and response.json()["detail"]["code"] == "NOT_CONFIGURED"
 
 
 def test_the_user_comes_only_from_the_token_never_from_the_request(client, repo):
@@ -362,7 +382,7 @@ def test_readiness_appears_in_exactly_two_operations():
 # ------------------------------------------------------------------ contract with the frontend
 
 
-TYPES_FILE = Path(__file__).resolve().parents[2] / "frontend" / "lib" / "training" / "types.ts"
+TYPES_FILE = Path(__file__).resolve().parents[3] / "frontend" / "lib" / "training" / "types.ts"
 
 
 def _interface_fields(name: str) -> set:
