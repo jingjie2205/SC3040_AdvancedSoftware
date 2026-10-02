@@ -42,6 +42,9 @@ export const btnSecondary =
 export const btnDanger =
   "flex items-center justify-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50";
 
+export const btnHero =
+  "flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2.5 text-xs font-bold text-black shadow-lg shadow-emerald-500/20 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50";
+
 export const inputClass =
   "mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500";
 
@@ -220,17 +223,22 @@ export function Segmented<T extends string>({
   value,
   options,
   onChange,
+  fill = false,
 }: {
   label: string;
   value: T;
   options: { value: T; label: string; icon?: LucideIcon }[];
   onChange: (value: T) => void;
+  /** On phones, share the width equally and drop the icons so every label fits. */
+  fill?: boolean;
 }) {
   return (
     <div
       role="group"
       aria-label={label}
-      className="flex w-fit max-w-full gap-1 overflow-x-auto rounded-lg border border-slate-800 bg-slate-950/60 p-1"
+      className={`flex max-w-full gap-1 overflow-x-auto rounded-lg border border-slate-800 bg-slate-950/60 p-1 ${
+        fill ? "w-full sm:w-fit" : "w-fit"
+      }`}
     >
       {options.map((option) => (
         <button
@@ -238,13 +246,17 @@ export function Segmented<T extends string>({
           type="button"
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
-          className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1 text-xs font-semibold transition ${
+          className={`flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md py-1 text-xs font-semibold transition ${
+            fill ? "flex-1 px-2 sm:flex-none sm:px-3" : "px-3"
+          } ${
             value === option.value
               ? "bg-emerald-500 text-black"
               : "text-slate-400 hover:text-white"
           }`}
         >
-          {option.icon && <option.icon className="h-3.5 w-3.5" aria-hidden="true" />}
+          {option.icon && (
+            <option.icon className={`h-3.5 w-3.5 ${fill ? "hidden sm:block" : ""}`} aria-hidden="true" />
+          )}
           {option.label}
         </button>
       ))}

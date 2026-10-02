@@ -28,6 +28,15 @@ import {
   inputClass,
 } from "./ui";
 
+function LegendItem({ swatch, label }: { swatch: string; label: string }) {
+  return (
+    <li className="flex items-center gap-1.5">
+      <span className={`h-2.5 w-2.5 rounded-sm ${swatch}`} aria-hidden="true" />
+      {label}
+    </li>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
@@ -269,9 +278,12 @@ export function PlanPanel({
           <div className={cardClass}>
             <div className="mb-5">
               <h3 className="text-base font-bold text-white">Weekly load</h3>
-              <p className="text-xs text-slate-400">
-                Planned load against what you completed. Amber bars are deload weeks.
-              </p>
+              <p className="text-xs text-slate-400">Planned load against what you completed.</p>
+              <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-slate-300">
+                <LegendItem swatch="bg-emerald-500/60" label="Planned" />
+                <LegendItem swatch="bg-amber-500/60" label="Planned (deload week)" />
+                <LegendItem swatch="bg-sky-400" label="Completed" />
+              </ul>
             </div>
             <div className="h-[260px] w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -280,12 +292,15 @@ export function PlanPanel({
                   <XAxis dataKey="label" stroke="#64748b" fontSize={11} />
                   <YAxis stroke="#64748b" fontSize={11} />
                   <Tooltip
+                    cursor={{ fill: "rgba(148, 163, 184, 0.08)" }}
                     contentStyle={{
                       backgroundColor: "#0f172a",
                       borderColor: "#334155",
                       borderRadius: "8px",
                       fontSize: "12px",
                     }}
+                    labelStyle={{ color: "#f1f5f9" }}
+                    itemStyle={{ color: "#cbd5e1" }}
                   />
                   <Bar dataKey="target" name="Planned (pts)" radius={[4, 4, 0, 0]} opacity={0.6}>
                     {rows.map((row) => (

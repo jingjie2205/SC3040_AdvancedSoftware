@@ -71,7 +71,7 @@ export function PreferencesForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate className={`${cardClass} space-y-6`}>
+    <form onSubmit={handleSubmit} noValidate className={`${cardClass} max-w-3xl space-y-6`}>
       <div>
         <h3 className="text-base font-bold text-white">Training preferences</h3>
         <p className="text-xs text-slate-400">

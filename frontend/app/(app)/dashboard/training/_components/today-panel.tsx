@@ -12,6 +12,7 @@ import {
   Plus,
   Repeat,
   SkipForward,
+  Sparkles,
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
@@ -36,6 +37,7 @@ import {
   Loading,
   StatusBadge,
   ToggleChip,
+  btnHero,
   btnPrimary,
   btnSecondary,
   cardClass,
@@ -408,23 +410,58 @@ function NoSessionToday({
   onLogAdHoc: () => void;
 }) {
   if (!hasPlan) {
+    const steps = [
+      { label: "Set your training preferences", done: hasPreferences },
+      { label: "Generate a plan", done: false },
+      { label: "Follow today's recommended workout", done: false },
+    ];
     return (
-      <div className="space-y-4">
-        <p className="text-sm text-slate-300">
-          {hasPreferences
-            ? "You don't have an active plan yet. Generate one to see a recommended workout here."
-            : "Set your training preferences first, then generate a plan to see a recommended workout here."}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {hasPreferences ? (
-            <button type="button" onClick={() => onGoTo("plan")} className={btnPrimary}>
-              Go to plan
-            </button>
-          ) : (
-            <button type="button" onClick={() => onGoTo("preferences")} className={btnPrimary}>
-              Set preferences
-            </button>
-          )}
+      <div className="flex flex-1 flex-col justify-center gap-6">
+        <div className="flex items-start gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-400">
+            <Sparkles className="h-6 w-6" aria-hidden="true" />
+          </div>
+          <div>
+            <h4 className="text-base font-bold text-white">Let&apos;s build your plan</h4>
+            <p className="mt-1 text-sm text-slate-400">
+              {hasPreferences
+                ? "Your preferences are saved. Generate a plan and today's recommended workout shows up here."
+                : "Tell us how you like to train, then generate a plan. Today's recommended workout shows up here."}
+            </p>
+          </div>
+        </div>
+
+        <ol className="space-y-2">
+          {steps.map((step, index) => (
+            <li
+              key={step.label}
+              className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-sm"
+            >
+              <span
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border text-xs font-semibold ${
+                  step.done
+                    ? "border-emerald-500/30 bg-emerald-500/20 text-emerald-400"
+                    : "border-slate-700 bg-slate-800 text-slate-400"
+                }`}
+              >
+                {step.done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : index + 1}
+              </span>
+              <span className={step.done ? "text-slate-400 line-through" : "text-slate-200"}>
+                {step.label}
+              </span>
+              <span className="sr-only">{step.done ? "(done)" : "(to do)"}</span>
+            </li>
+          ))}
+        </ol>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onGoTo(hasPreferences ? "plan" : "preferences")}
+            className={btnHero}
+          >
+            {hasPreferences ? "Generate my plan" : "Set preferences"}
+          </button>
           <button type="button" onClick={onLogAdHoc} className={btnSecondary}>
             <Plus className="h-3.5 w-3.5" aria-hidden="true" />
             Log ad hoc session

@@ -84,99 +84,97 @@ export default function TrainingPage() {
   const adaptation = plan?.lastAdaptation && !plan.lastAdaptation.acknowledged ? plan.lastAdaptation : null;
 
   return (
-    <div className="min-h-screen bg-slate-950 px-4 py-8 sm:px-8">
-      <div className="mx-auto max-w-6xl space-y-8">
-        {/* Header */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
-              Training
-            </h1>
-            <p className="mt-1 text-sm text-slate-400">
-              Your plan, today&apos;s workout and readiness in one place.
-            </p>
-          </div>
-          {notice && (
-            <span
-              role="status"
-              className="text-xs font-medium text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-lg border border-emerald-500/20 w-fit"
-            >
-              {notice}
-            </span>
-          )}
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
+            Training
+          </h1>
+          <p className="mt-1 text-sm text-slate-400">
+            Your plan, today&apos;s workout and readiness in one place.
+          </p>
         </div>
-
-        <Segmented label="Training sections" value={tab} onChange={setTab} options={[...TABS]} />
-
-        {adaptation && (
-          <div
+        {notice && (
+          <span
             role="status"
-            className="flex flex-col gap-3 rounded-2xl border border-sky-500/30 bg-sky-500/10 p-4 sm:flex-row sm:items-start sm:justify-between"
+            className="text-xs font-medium text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-lg border border-emerald-500/20 w-fit"
           >
-            <div className="flex gap-3 text-sm text-sky-100">
-              <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-300" aria-hidden="true" />
-              <div>
-                <p className="font-semibold">
-                  Your plan was adapted on {formatDay(adaptation.adaptedOn)}
-                  <span className="font-normal text-sky-200"> · {TRIGGER_LABEL[adaptation.trigger]}</span>
-                </p>
-                <p className="mt-1 text-xs text-sky-200">{adaptation.reason}</p>
-              </div>
-            </div>
-            <button type="button" onClick={acknowledgeAdaptation} className={btnSecondary}>
-              Got it
-            </button>
-          </div>
-        )}
-
-        {loadError ? (
-          <ErrorBox message={loadError} onRetry={refresh} />
-        ) : !loaded ? (
-          <Loading label="Loading your training data…" />
-        ) : (
-          <>
-            {tab === "today" && (
-              <TodayPanel
-                preferences={preferences}
-                plan={plan}
-                refreshKey={refreshKey}
-                onChanged={refresh}
-                onNotice={showNotice}
-                onGoTo={setTab}
-              />
-            )}
-            {tab === "schedule" && (
-              <SchedulePanel
-                plan={plan}
-                refreshKey={refreshKey}
-                onChanged={refresh}
-                onNotice={showNotice}
-              />
-            )}
-            {tab === "plan" && (
-              <PlanPanel
-                preferences={preferences}
-                plan={plan}
-                refreshKey={refreshKey}
-                onChanged={refresh}
-                onNotice={showNotice}
-                onGoToPreferences={() => setTab("preferences")}
-              />
-            )}
-            {tab === "preferences" && (
-              <PreferencesForm
-                key={preferences?.updatedAt ?? "new"}
-                preferences={preferences}
-                hasPlan={plan !== null}
-                onSaved={(message) => {
-                  showNotice(message);
-                  refresh();
-                }}
-              />
-            )}
-          </>
+            {notice}
+          </span>
         )}
       </div>
+
+      <Segmented label="Training sections" value={tab} onChange={setTab} options={[...TABS]} fill />
+
+      {adaptation && (
+        <div
+          role="status"
+          className="flex flex-col gap-3 rounded-2xl border border-sky-500/30 bg-sky-500/10 p-4 sm:flex-row sm:items-start sm:justify-between"
+        >
+          <div className="flex gap-3 text-sm text-sky-100">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-300" aria-hidden="true" />
+            <div>
+              <p className="font-semibold">
+                Your plan was adapted on {formatDay(adaptation.adaptedOn)}
+                <span className="font-normal text-sky-200"> · {TRIGGER_LABEL[adaptation.trigger]}</span>
+              </p>
+              <p className="mt-1 text-xs text-sky-200">{adaptation.reason}</p>
+            </div>
+          </div>
+          <button type="button" onClick={acknowledgeAdaptation} className={btnSecondary}>
+            Got it
+          </button>
+        </div>
+      )}
+
+      {loadError ? (
+        <ErrorBox message={loadError} onRetry={refresh} />
+      ) : !loaded ? (
+        <Loading label="Loading your training data…" />
+      ) : (
+        <>
+          {tab === "today" && (
+            <TodayPanel
+              preferences={preferences}
+              plan={plan}
+              refreshKey={refreshKey}
+              onChanged={refresh}
+              onNotice={showNotice}
+              onGoTo={setTab}
+            />
+          )}
+          {tab === "schedule" && (
+            <SchedulePanel
+              plan={plan}
+              refreshKey={refreshKey}
+              onChanged={refresh}
+              onNotice={showNotice}
+            />
+          )}
+          {tab === "plan" && (
+            <PlanPanel
+              preferences={preferences}
+              plan={plan}
+              refreshKey={refreshKey}
+              onChanged={refresh}
+              onNotice={showNotice}
+              onGoToPreferences={() => setTab("preferences")}
+            />
+          )}
+          {tab === "preferences" && (
+            <PreferencesForm
+              key={preferences?.updatedAt ?? "new"}
+              preferences={preferences}
+              hasPlan={plan !== null}
+              onSaved={(message) => {
+                showNotice(message);
+                refresh();
+              }}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 }
