@@ -35,14 +35,25 @@ def modelling_workouts(workouts: Sequence[WorkoutSession]) -> List[WorkoutSessio
 
 
 @dataclass(frozen=True)
+class AthleteProfile:
+    """The parts of the user's profile that shape a plan. Anything can be missing."""
+
+    activity_level: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class Baseline:
     volume: float
     session_count: int
     used_default: bool
+    from_profile: bool = False
 
 
 def baseline_from_history(
-    workouts: Sequence[WorkoutSession], as_of: date, rules: TrainingRules = RULES
+    workouts: Sequence[WorkoutSession],
+    as_of: date,
+    rules: TrainingRules = RULES,
+    activity_level: Optional[str] = None,
 ) -> Baseline:
     """
     Mean weekly volume over the last few complete weeks before the week containing `as_of`,
@@ -50,14 +61,16 @@ def baseline_from_history(
 
     Hard Rule 3: this is computed from what was actually logged, never from planned sessions,
     so someone who missed three weeks doesn't get a plan that assumes they trained through them.
-    With too little history it falls back to a conservative default.
+    With too little history it falls back to a conservative default, lower for people whose
+    profile says they are less active.
     """
     end = week_start(as_of)
     start = end - timedelta(weeks=rules.baseline_window_weeks)
     recent = [w for w in modelling_workouts(workouts) if start <= w.date < end]
     active_weeks = {week_start(w.date) for w in recent}
     if len(active_weeks) < rules.min_history_weeks_for_baseline:
-        return Baseline(rules.default_baseline_volume, len(recent), True)
+        default = rules.default_baseline_for(activity_level)
+        return Baseline(default, len(recent), True, default != rules.default_baseline_volume)
     total = sum(w.actual_volume for w in recent)
     return Baseline(float(round_half_up(total / len(active_weeks))), len(recent), False)
 

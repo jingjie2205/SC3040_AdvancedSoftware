@@ -1,6 +1,6 @@
 # Training routine backend
 
-The API behind the Training page (`frontend/app/dashboard/training`). It runs inside the existing
+The API behind the Training page (`frontend/app/(app)/dashboard/training`). It runs inside the existing
 FastAPI service; `app/main.py` mounts it with `install_training_routes(app)`.
 
 ## Endpoints
@@ -103,12 +103,22 @@ harness isn't part of the repo.
   fingerprint is unchanged, so new history or a new check-in recomputes it without explicit invalidation.
 - **Baselines use the last 4 complete calendar weeks**, so no week is cut in half.
 - **One planned session per user per day**, enforced in the database.
+- **The profile sets the starting volume, never overrides history.** With under
+  `min_history_weeks_for_baseline` weeks of logged training, the baseline starts from the user's
+  `activity_level` (`config.default_baseline_by_activity_level`), so a sedentary beginner isn't given
+  the same first week as an athlete. With enough history the logged volume is used and the profile is
+  ignored. The plan's adaptation note says when the activity level set the default.
+- **Only `users.activity_level` is read from the profile table**, because that table also holds the
+  Strava tokens. If the table or column isn't there yet, a warning is logged and the plain default is
+  used; any other database error still fails the request.
 
 ## Not built yet, and who it depends on
 
 - **Check-ins and sleep.** `daily_checkins` (Home page) doesn't exist, so readiness runs without
   those signals. `SupabaseTrainingRepository.get_latest_checkin` is the one place to wire it in.
   `load_rating` is treated as perceived load from 1 to 5, higher meaning worse. Confirm with the owner.
+- **Fitness goal.** T-2 lists it as an input, but `users.fitness_goal` is free text, so nothing
+  interprets it. It needs a fixed list of goals from the Settings page before it can shape a plan.
 - **`activities.source`.** The dashboard's `activities` table is Strava-only and has no `source`
   column, so it is deliberately not read.
 - **Exam load.** `ReadinessFeatures.days_until_exam` is supported by the scorer but nothing supplies it

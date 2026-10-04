@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from postgrest.exceptions import APIError
 
 from app.training import repository
 from app.training.models import (
@@ -12,6 +13,7 @@ from app.training.models import (
     TrainingPreferences,
     WorkoutSession,
 )
+from app.training.planner import AthleteProfile
 from app.training.repository import ChangeSet, SupabaseTrainingRepository, changes_payload
 from training_fakes import USER_A
 
@@ -23,8 +25,10 @@ class RecordedQuery:
     def __init__(self, recorder, table):
         self.recorder, self.table_name = recorder, table
         self.filters, self.operation, self.payload, self.kwargs = [], "select", None, {}
+        self.selected = ()
 
-    def select(self, *_):
+    def select(self, *columns):
+        self.selected = columns
         return self
 
     def eq(self, column, value):
@@ -51,6 +55,8 @@ class RecordedQuery:
 
     def execute(self):
         self.recorder.queries.append(self)
+        if self.recorder.error:
+            raise self.recorder.error
         return SimpleNamespace(data=self.recorder.rows.get(self.table_name, []))
 
 
@@ -58,7 +64,7 @@ class RecordingClient:
     """Stands in for the supabase client and remembers exactly what was asked of it."""
 
     def __init__(self, rows=None):
-        self.rows, self.queries, self.rpcs = rows or {}, [], []
+        self.rows, self.queries, self.rpcs, self.error = rows or {}, [], [], None
 
     def table(self, name):
         return RecordedQuery(self, name)
@@ -212,3 +218,37 @@ def test_the_repository_is_built_on_the_shared_supabase_admin_client(monkeypatch
     client = object()
     monkeypatch.setattr(repository, "get_supabase_admin", lambda: client)
     assert repository.create_repository().db is client
+
+
+# ------------------------------------------------------------------ profile
+
+
+def test_the_profile_read_asks_for_one_column_scoped_to_the_user():
+    repo, client = repo_with({"users": [{"activity_level": "VERY_ACTIVE"}]})
+    assert repo.get_profile(USER_A) == AthleteProfile(activity_level="VERY_ACTIVE")
+    query = client.queries[-1]
+    assert query.table_name == "users"
+    # The same table holds Strava tokens, so this must never become select("*").
+    assert query.selected == ("activity_level",)
+    assert ("eq", "user_id", USER_A) in query.filters
+
+
+def test_no_profile_row_means_no_profile():
+    repo, _ = repo_with({"users": []})
+    assert repo.get_profile(USER_A) is None
+
+
+@pytest.mark.parametrize("code", ["42P01", "42703", "PGRST204", "PGRST205"])
+def test_a_profile_table_or_column_that_isnt_there_yet_falls_back_and_is_logged(code, caplog):
+    repo, client = repo_with()
+    client.error = APIError({"message": "missing", "code": code, "hint": None, "details": None})
+    with caplog.at_level("WARNING"):
+        assert repo.get_profile(USER_A) is None
+    assert code in caplog.text
+
+
+def test_any_other_database_error_reading_the_profile_is_not_swallowed():
+    repo, client = repo_with()
+    client.error = APIError({"message": "permission denied", "code": "42501", "hint": None, "details": None})
+    with pytest.raises(APIError):
+        repo.get_profile(USER_A)

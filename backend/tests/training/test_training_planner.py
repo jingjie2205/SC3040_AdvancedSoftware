@@ -28,6 +28,34 @@ def test_baseline_is_the_mean_of_weeks_that_had_training():
     assert baseline.session_count == 8
 
 
+ACTIVITY_LEVELS = ["SEDENTARY", "LIGHTLY_ACTIVE", "MODERATELY_ACTIVE", "VERY_ACTIVE", "EXTRA_ACTIVE"]  # as in models/users.py
+
+
+def test_the_default_baseline_covers_every_activity_level_and_rises_with_activity():
+    volumes = [RULES.default_baseline_for(level) for level in ACTIVITY_LEVELS]
+    assert volumes == sorted(volumes) and len(set(volumes)) == len(volumes)
+    assert RULES.default_baseline_for("MODERATELY_ACTIVE") == RULES.default_baseline_volume
+
+
+@pytest.mark.parametrize("level", [None, "", "SOMETHING_NEW"])
+def test_a_missing_or_unknown_activity_level_gets_the_plain_default(level):
+    assert RULES.default_baseline_for(level) == RULES.default_baseline_volume
+
+
+def test_with_too_little_history_the_default_follows_the_activity_level():
+    beginner = baseline_from_history([], MONDAY, activity_level="SEDENTARY")
+    assert (beginner.volume, beginner.used_default, beginner.from_profile) == (60, True, True)
+    unknown = baseline_from_history([], MONDAY)
+    assert (unknown.volume, unknown.from_profile) == (RULES.default_baseline_volume, False)
+
+
+def test_enough_history_always_beats_the_profile():
+    history = [workout(MONDAY - timedelta(days=7 * w) + timedelta(days=d), 30) for w in range(1, 5) for d in (0, 2)]
+    with_profile = baseline_from_history(history, MONDAY, activity_level="EXTRA_ACTIVE")
+    assert with_profile == baseline_from_history(history, MONDAY)
+    assert with_profile.used_default is False and with_profile.from_profile is False
+
+
 def test_baseline_falls_back_to_conservative_default_with_under_two_weeks_of_history():
     one_week = [workout(MONDAY - timedelta(days=3), 500), workout(MONDAY - timedelta(days=5), 500)]
     baseline = baseline_from_history(one_week, MONDAY)

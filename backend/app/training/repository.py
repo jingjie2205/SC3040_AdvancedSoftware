@@ -6,10 +6,12 @@ scoping is done here: every query names the user explicitly, and nothing accepts
 request body. All writes that touch more than one row go through one `ChangeSet`, applied by a
 single Postgres function in one transaction, so a failure never leaves a partial write.
 """
+import logging
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
+from postgrest.exceptions import APIError
 from supabase import Client
 
 from ..commons.auth.deps import get_supabase_admin
@@ -20,7 +22,14 @@ from .models import (
     TrainingPreferences,
     WorkoutSession,
 )
+from .planner import AthleteProfile
 from .readiness import Checkin
+
+
+logger = logging.getLogger(__name__)
+
+# Postgres and PostgREST codes for "that table or column doesn't exist (yet)".
+_SCHEMA_NOT_READY = {"42P01", "42703", "PGRST204", "PGRST205"}
 
 
 @dataclass
@@ -50,6 +59,8 @@ class TrainingRepository(Protocol):
     def get_workout_for_session(
         self, user_id: str, session_id: str
     ) -> Optional[WorkoutSession]: ...
+
+    def get_profile(self, user_id: str) -> Optional[AthleteProfile]: ...
 
     def get_latest_checkin(self, user_id: str, on_or_before: date) -> Optional[Checkin]: ...
 
@@ -133,6 +144,21 @@ class SupabaseTrainingRepository:
             .eq("planned_session_id", session_id)
         )
         return WorkoutSession.model_validate(row) if row else None
+
+    # ------------------------------------------------------------------ profile
+
+    def get_profile(self, user_id: str) -> Optional[AthleteProfile]:
+        # The profile is the Settings page's `users` table, which also holds the Strava tokens, so
+        # ask for the one column this feature uses and nothing else.
+        try:
+            row = self._first(self.db.table("users").select("activity_level").eq("user_id", user_id))
+        except APIError as error:
+            if error.code not in _SCHEMA_NOT_READY:
+                raise
+            # The table or column isn't there (yet). Plans fall back to the default baseline.
+            logger.warning("Profile not readable (%s); using the default baseline", error.code)
+            return None
+        return AthleteProfile(activity_level=row.get("activity_level")) if row else None
 
     # ------------------------------------------------------------------ readiness
 

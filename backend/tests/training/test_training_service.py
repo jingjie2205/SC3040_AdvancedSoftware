@@ -10,7 +10,7 @@ from app.training.models import (
     ReadinessScore,
     SessionResponseRequest,
 )
-from app.training.planner import week_start
+from app.training.planner import AthleteProfile, week_start
 from app.training.readiness import Checkin, RuleBasedScorer
 from app.training.service import TrainingService
 from training_fakes import (
@@ -82,6 +82,48 @@ def test_a_generated_plan_carries_the_medical_notice_and_a_baseline_from_history
     sessions = repo.list_sessions(USER_A, plan.start_date, plan.end_date)
     assert sessions and min(s.date for s in sessions) >= TODAY
     assert all(s.plan_id == plan.id and s.status == "planned" for s in sessions)
+
+
+def _first_plan(profile=None, user: str = USER_A):
+    """A brand-new user (no history) generating their first plan."""
+    service, repo = make()
+    service.save_preferences(user, STANDARD_PREFS)
+    if profile:
+        repo.profiles[user] = profile
+    return service, service.generate_plan(user, TODAY, GeneratePlanRequest(weeks=4))
+
+
+def test_a_new_users_first_plan_starts_from_their_activity_level():
+    _, plan = _first_plan(AthleteProfile(activity_level="SEDENTARY"))
+    assert plan.baseline_volume == RULES.default_baseline_for("SEDENTARY") < RULES.default_baseline_volume
+
+
+def test_without_a_profile_the_first_plan_uses_the_plain_default():
+    _, plan = _first_plan()
+    assert plan.baseline_volume == RULES.default_baseline_volume
+
+
+def test_logged_history_beats_the_profile_when_generating():
+    with_profile, repo = onboarded()
+    repo.profiles[USER_A] = AthleteProfile(activity_level="EXTRA_ACTIVE")
+    plan = with_profile.generate_plan(USER_A, TODAY, GeneratePlanRequest(weeks=4, confirm_replace=True))
+    plain, _ = onboarded()
+    assert plan.baseline_volume == plain.generate_plan(USER_A, TODAY, GeneratePlanRequest(weeks=4)).baseline_volume
+
+
+def test_one_users_profile_never_shapes_another_users_plan():
+    service, repo = make()
+    service.save_preferences(USER_B, STANDARD_PREFS)
+    repo.profiles[USER_A] = AthleteProfile(activity_level="SEDENTARY")
+    plan = service.generate_plan(USER_B, TODAY, GeneratePlanRequest(weeks=4))
+    assert plan.baseline_volume == RULES.default_baseline_volume
+
+
+def test_the_adaptation_note_names_the_activity_level_when_it_set_the_default():
+    service, plan = _first_plan(AthleteProfile(activity_level="SEDENTARY"))
+    adapted = service.recalculate_plan(USER_A, TODAY)
+    assert adapted.last_adaptation is not None
+    assert "for your activity level" in adapted.last_adaptation.reason
 
 
 def test_plan_and_sessions_are_written_in_one_transaction():

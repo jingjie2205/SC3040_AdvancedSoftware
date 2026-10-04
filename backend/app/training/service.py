@@ -319,7 +319,10 @@ class TrainingService:
     def _baseline(self, user_id: str, today: date) -> Baseline:
         window_start = week_start(today) - timedelta(weeks=self.rules.baseline_window_weeks)
         workouts = self.repo.list_workouts(user_id, window_start, today)
-        return baseline_from_history(workouts, today, self.rules)
+        profile = self.repo.get_profile(user_id)
+        return baseline_from_history(
+            workouts, today, self.rules, profile.activity_level if profile else None
+        )
 
     def _new_sessions(
         self,
@@ -388,7 +391,8 @@ class TrainingService:
             rebase = (
                 f"There are fewer than {self.rules.min_history_weeks_for_baseline} weeks of logged "
                 f"training in the last {weeks} weeks, so a conservative default of "
-                f"{baseline.volume:.0f} pts/week was used."
+                f"{baseline.volume:.0f} pts/week was used"
+                + (" for your activity level." if baseline.from_profile else ".")
             )
         else:
             rebase = (

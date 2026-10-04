@@ -5,7 +5,7 @@ nothing elsewhere in the package hard-codes a threshold.
 Volume is expressed in "load points" (roughly minutes weighted by intensity).
 """
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Optional
 
 PLAN_NOTICE = (
     "This plan is a general training guide, not medical advice. Stop and speak to a "
@@ -30,6 +30,18 @@ class TrainingRules:
     baseline_window_weeks: int = 4
     min_history_weeks_for_baseline: int = 2
     default_baseline_volume: float = 100.0
+    # Starting weekly volume when there is too little logged history, by the activity level on the
+    # user's profile. Lower for people who are less active today, so a beginner isn't handed a week
+    # they can't do. A missing profile or an unlisted level gets `default_baseline_volume`.
+    default_baseline_by_activity_level: Dict[str, float] = field(
+        default_factory=lambda: {
+            "SEDENTARY": 60.0,
+            "LIGHTLY_ACTIVE": 80.0,
+            "MODERATELY_ACTIVE": 100.0,
+            "VERY_ACTIVE": 120.0,
+            "EXTRA_ACTIVE": 140.0,
+        }
+    )
 
     high_intensity_band: str = "push"
     partial_completion_ratio: float = 0.8
@@ -53,6 +65,9 @@ class TrainingRules:
     band_duration_factor: Dict[str, float] = field(
         default_factory=lambda: {"push": 1.0, "light": 0.75, "deload": 0.6}
     )
+
+    def default_baseline_for(self, activity_level: Optional[str]) -> float:
+        return self.default_baseline_by_activity_level.get(activity_level or "", self.default_baseline_volume)
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ from app.training.models import (
     WorkoutSession,
     WorkoutSource,
 )
+from app.training.planner import AthleteProfile
 from app.training.readiness import Checkin
 from app.training.repository import ChangeSet
 
@@ -46,6 +47,7 @@ class FakeTrainingRepository:
         self.workouts: Dict[str, Tuple[str, WorkoutSession]] = {}
         self.readiness: Dict[Tuple[str, date], Tuple[ReadinessScore, str]] = {}
         self.checkins: Dict[str, Checkin] = {}
+        self.profiles: Dict[str, AthleteProfile] = {}
         self.apply_calls = 0
 
     # ---------------------------------------------------------------- reads
@@ -79,6 +81,9 @@ class FakeTrainingRepository:
             if owner == user_id and workout.planned_session_id == session_id:
                 return deepcopy(workout)
         return None
+
+    def get_profile(self, user_id: str) -> Optional[AthleteProfile]:
+        return self.profiles.get(user_id)
 
     def get_latest_checkin(self, user_id: str, on_or_before: date) -> Optional[Checkin]:
         return self.checkins.get(user_id)
