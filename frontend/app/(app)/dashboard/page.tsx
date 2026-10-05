@@ -146,8 +146,8 @@ export default function HomePage() {
   const [weight, setWeight] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [editingHealth, setEditingHealth] = useState(false);
-  const [draftHeight, setDraftHeight] = useState("");
-  const [draftWeight, setDraftWeight] = useState("");
+  const [userHeight, setUserHeight] = useState("");
+  const [userWeight, setUserWeight] = useState("");
 
   // Import state
   const [importingSource, setImportingSource] = useState<string | null>(null);
@@ -178,11 +178,11 @@ export default function HomePage() {
         const user = await response.json();
         if (user.height) {
           setHeight(user.height);
-          setDraftHeight(String(user.height));
+          setUserHeight(String(user.height));
         }
         if (user.weight) {
           setWeight(user.weight);
-          setDraftWeight(String(user.weight));
+          setUserWeight(String(user.weight));
         }
       } catch (error) {
         console.error("Error fetching user data:", error);
@@ -194,14 +194,14 @@ export default function HomePage() {
   }, []);
 
   function startEditHealth() {
-    setDraftHeight(height ? String(height) : "");
-    setDraftWeight(weight ? String(weight) : "");
+    setUserHeight(height ? String(height) : "");
+    setUserWeight(weight ? String(weight) : "");
     setEditingHealth(true);
   }
 
   async function saveHealth() {
-    const h = parseFloat(draftHeight);
-    const w = parseFloat(draftWeight);
+    const h = parseFloat(userHeight);
+    const w = parseFloat(userWeight);
 
     try {
       const response = await fetch("/api/user", {
@@ -360,8 +360,8 @@ export default function HomePage() {
                   <span className="text-xs text-slate-400">Height (cm)</span>
                   <input
                     type="number"
-                    value={draftHeight}
-                    onChange={(e) => setDraftHeight(e.target.value)}
+                    value={userHeight}
+                    onChange={(e) => setUserHeight(e.target.value)}
                     className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
                   />
                 </label>
@@ -369,8 +369,8 @@ export default function HomePage() {
                   <span className="text-xs text-slate-400">Weight (kg)</span>
                   <input
                     type="number"
-                    value={draftWeight}
-                    onChange={(e) => setDraftWeight(e.target.value)}
+                    value={userWeight}
+                    onChange={(e) => setUserWeight(e.target.value)}
                     className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
                   />
                 </label>
