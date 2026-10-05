@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Apple,
@@ -142,11 +142,12 @@ function bmiCategory(bmi: number) {
 
 export default function HomePage() {
   // Health data
-  const [height, setHeight] = useState(178); // cm
-  const [weight, setWeight] = useState(74.5); // kg
+  const [height, setHeight] = useState<number | null>(null);
+  const [weight, setWeight] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
   const [editingHealth, setEditingHealth] = useState(false);
-  const [draftHeight, setDraftHeight] = useState(String(height));
-  const [draftWeight, setDraftWeight] = useState(String(weight));
+  const [draftHeight, setDraftHeight] = useState("");
+  const [draftWeight, setDraftWeight] = useState("");
 
   // Import state
   const [importingSource, setImportingSource] = useState<string | null>(null);
@@ -156,25 +157,73 @@ export default function HomePage() {
   const [trainingView, setTrainingView] = useState<TrainingView>("latest");
   const [foodView, setFoodView] = useState<FoodView>("daily");
 
-  const bmi = useMemo(() => computeBmi(height, weight), [height, weight]);
-  const bmiInfo = bmiCategory(bmi);
+  const bmi = useMemo(() => {
+    if (height && weight) return computeBmi(height, weight);
+    return null;
+  }, [height, weight]);
+  const bmiInfo = bmi ? bmiCategory(bmi) : null;
 
   const trainingData =
     trainingView === "daily" ? DAILY_TRAINING : WEEKLY_TRAINING;
   const foodData = foodView === "daily" ? DAILY_FOOD : WEEKLY_FOOD;
 
+  useEffect(() => {
+    async function fetchUserData() {
+      setLoading(true);
+      try {
+        const response = await fetch("/api/user");
+        if (!response.ok) {
+          throw new Error("Failed to fetch user data");
+        }
+        const user = await response.json();
+        if (user.height) {
+          setHeight(user.height);
+          setDraftHeight(String(user.height));
+        }
+        if (user.weight) {
+          setWeight(user.weight);
+          setDraftWeight(String(user.weight));
+        }
+      } catch (error) {
+        console.error("Error fetching user data:", error);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchUserData();
+  }, []);
+
   function startEditHealth() {
-    setDraftHeight(String(height));
-    setDraftWeight(String(weight));
+    setDraftHeight(height ? String(height) : "");
+    setDraftWeight(weight ? String(weight) : "");
     setEditingHealth(true);
   }
 
-  function saveHealth() {
+  async function saveHealth() {
     const h = parseFloat(draftHeight);
     const w = parseFloat(draftWeight);
-    if (!Number.isNaN(h) && h > 0) setHeight(h);
-    if (!Number.isNaN(w) && w > 0) setWeight(w);
-    setEditingHealth(false);
+
+    try {
+      const response = await fetch("/api/user", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ height: h, weight: w }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to update user data");
+      }
+
+      const updatedUser = await response.json();
+
+      setHeight(updatedUser.height);
+      setWeight(updatedUser.weight);
+      setEditingHealth(false);
+    } catch (error) {
+      console.error("Error saving health data:", error);
+    }
   }
 
   return (
@@ -246,10 +295,18 @@ export default function HomePage() {
                     </span>
                   </div>
                   <div className="mt-2 text-2xl font-black text-white">
-                    {height}{" "}
-                    <span className="text-sm font-medium text-slate-400">
-                      cm
-                    </span>
+                    {loading ? (
+                      "-"
+                    ) : height ? (
+                      <>
+                        {height}{" "}
+                        <span className="text-sm font-medium text-slate-400">
+                          cm
+                        </span>
+                      </>
+                    ) : (
+                      "-"
+                    )}
                   </div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
@@ -259,30 +316,42 @@ export default function HomePage() {
                     </span>
                   </div>
                   <div className="mt-2 text-2xl font-black text-white">
-                    {weight}{" "}
-                    <span className="text-sm font-medium text-slate-400">
-                      kg
-                    </span>
+                    {loading ? (
+                      "-"
+                    ) : weight ? (
+                      <>
+                        {weight}{" "}
+                        <span className="text-sm font-medium text-slate-400">
+                          kg
+                        </span>
+                      </>
+                    ) : (
+                      "-"
+                    )}
                   </div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-slate-400">BMI</span>
-                    <span
-                      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${bmiInfo.bg} ${bmiInfo.color} border ${bmiInfo.border}`}
-                    >
-                      {bmiInfo.label}
-                    </span>
+                    {bmiInfo && (
+                      <span
+                        className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${bmiInfo.bg} ${bmiInfo.color} border ${bmiInfo.border}`}
+                      >
+                        {bmiInfo.label}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-2 text-2xl font-black text-white">
-                    {bmi.toFixed(1)}
+                    {loading ? "-" : bmi ? bmi.toFixed(1) : "-"}
                   </div>
-                  <div className="mt-2 w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                    <div
-                      className={`h-full ${bmiInfo.bar}`}
-                      style={{ width: `${Math.min(100, (bmi / 40) * 100)}%` }}
-                    />
-                  </div>
+                  {bmi && bmiInfo && (
+                    <div className="mt-2 w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className={`h-full ${bmiInfo.bar}`}
+                        style={{ width: `${Math.min(100, (bmi / 40) * 100)}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (

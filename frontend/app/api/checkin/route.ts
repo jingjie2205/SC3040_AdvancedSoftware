@@ -2,7 +2,7 @@
 import {
   CheckInDatesResponse,
   CheckInStreakResponse,
-} from "../../../models/checkin";
+} from "../../models/checkin";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
