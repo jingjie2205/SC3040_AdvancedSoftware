@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import "./assets/globals.css";
 
 export const metadata: Metadata = {
-  title: "EnduranceAI — AI-Driven Endurance & Recovery",
-  description: "Serverless, zero-cost AI-driven endurance training, Banister TRIMP telemetry, and ACWR recovery optimization.",
+  title: "FITRA — AI-Driven Endurance & Recovery",
+  description:
+    "Serverless, zero-cost AI-driven endurance training, Banister TRIMP telemetry, and ACWR recovery optimization.",
 };
 
 export default function RootLayout({
