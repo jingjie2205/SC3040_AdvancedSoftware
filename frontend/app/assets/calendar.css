@@ -1,0 +1,177 @@
+.checkin-card {
+  width: 100%;
+  border: 1px solid rgba(30, 41, 59, 0.8);
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.6);
+  padding: 1.25rem;
+  backdrop-filter: blur(12px);
+}
+
+/* Header */
+
+.checkin-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.checkin-header h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.checkin-header p {
+  margin: 0.25rem 0 0;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.checkin-streak {
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  padding: 0.3rem 0.6rem;
+  color: #fbbf24;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+/* Weekdays */
+
+.checkin-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.25rem;
+  margin-bottom: 0.35rem;
+}
+
+.checkin-weekdays div {
+  text-align: center;
+  color: #64748b;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+/* Calendar */
+
+.checkin-calendar {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.35rem;
+}
+
+.checkin-day {
+  position: relative;
+  display: flex;
+  aspect-ratio: 1;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.6rem;
+  background: rgba(30, 41, 59, 0.45);
+  color: #000000;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+
+
+/* Checked-in day */
+
+.checkin-day.checked-in {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: #34d399;
+}
+
+
+
+.checkin-day.missed {
+  background-color: rgb(190, 190, 190);
+}
+/* Checkmark */
+
+.checkin-mark {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  color: #10b981;
+  font-size: 0.55rem;
+  font-weight: 900;
+}
+
+.missed-checkin-mark {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  color: #b91010;
+  font-size: 0.55rem;
+  font-weight: 900;
+}
+/* Today */
+
+.checkin-day.today {
+  background: #10b981;
+  border: none;
+  color: #020617;
+  font-weight: 800;
+}
+
+.checkin-day.today .checkin-mark {
+  color: #020617;
+}
+
+/* Legend */
+
+.checkin-legend {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1rem;
+  color: #64748b;
+  font-size: 0.65rem;
+}
+
+.checkin-legend > div {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color:#ffffff
+}
+
+.legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.legend-dot.checked {
+  background: #10b981;
+}
+
+.legend-dot.missed {
+  background: #ff0000;
+}
+
+/* Button */
+
+.checkin-button {
+  width: 100%;
+  margin-top: 1rem;
+  border: none;
+  border-radius: 0.6rem;
+  background: #10b981;
+  padding: 0.6rem 1rem;
+  color: #020617;
+  font-size: 0.75rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.checkin-button:hover {
+  background: #34d399;
+}

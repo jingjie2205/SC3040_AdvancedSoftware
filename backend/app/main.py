@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .commons.config import get_settings
 from .controllers.users import router as users_router
 from .controllers.strava import router as strava_router
+from .controllers.checkin import router as checkin_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fitra.backend")
@@ -22,7 +23,7 @@ app = FastAPI(
 # CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL, "http://localhost:3000", "http://127.0.0.1:3000", "*"],
+    allow_origins=[settings.FRONTEND_URL, "http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,6 +34,7 @@ app.add_middleware(
 # ============================================================================
 app.include_router(users_router)
 app.include_router(strava_router)
+app.include_router(checkin_router)
 
 @app.get("/health", tags=["Health"])
 async def health_check():
