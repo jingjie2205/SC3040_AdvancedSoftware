@@ -15,7 +15,7 @@ from typing import List, Optional, Protocol, Sequence
 from pydantic import Field
 
 from .config import READINESS_RULES, ReadinessRules
-from .models import ApiModel, IntensityBand, ReadinessFactor, ScoreResult
+from .models import ApiModel, IntensityBand, ModelInfo, ReadinessFactor, ScoreResult
 
 # --------------------------------------------------------------------------- features
 
@@ -88,9 +88,12 @@ def build_features(
     )
 
 
-def fingerprint(features: ReadinessFeatures) -> str:
-    """Stable id for a feature set. A cached score is only valid while this hasn't changed."""
-    payload = json.dumps(features.model_dump(), sort_keys=True)
+def fingerprint(features: ReadinessFeatures, scorer_version: str = "") -> str:
+    """
+    Stable id for a feature set and the scorer that read it. A cached score is only valid while
+    neither has changed, so switching scorers recomputes instead of serving the old scorer's answer.
+    """
+    payload = json.dumps({"features": features.model_dump(), "scorer": scorer_version}, sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
@@ -98,16 +101,20 @@ def fingerprint(features: ReadinessFeatures) -> str:
 
 
 class ReadinessScorer(Protocol):
+    version: str
+
     def score(self, features: ReadinessFeatures) -> ScoreResult: ...
+
+    def info(self) -> ModelInfo: ...
 
 
 @dataclass(frozen=True)
-class _Contribution:
+class Contribution:
     delta: float
     factor: ReadinessFactor
 
 
-def _impact(delta: float) -> str:
+def impact_for(delta: float) -> str:
     if delta <= -1:
         return "negative"
     if delta >= 1:
@@ -115,14 +122,61 @@ def _impact(delta: float) -> str:
     return "neutral"
 
 
+def classify(score: int, rules: ReadinessRules = READINESS_RULES) -> IntensityBand:
+    if score >= rules.push_min_score:
+        return "push"
+    if score >= rules.light_min_score:
+        return "light"
+    return "deload"
+
+
+def explain(classification: IntensityBand, ranked: List[Contribution]) -> str:
+    """One line on why. `ranked` is ordered by how much each signal moved the score."""
+    drags = [c for c in ranked if c.delta <= -1]
+    if not ranked:
+        return "Not enough data yet, so no adjustments are being made."
+    if classification == "deload":
+        label = drags[0].factor.label.lower() if drags else "several signals"
+        return f"Fatigue signals are stacking up, mainly {label}. Prioritise recovery today."
+    if classification == "light":
+        label = drags[0].factor.label if drags else "Your recent signals"
+        return f"{label} is holding your score back, so keep it easier today."
+    if drags:
+        return f"Mostly recovered. Keep an eye on {drags[0].factor.label.lower()}."
+    return "Well recovered. Nothing is holding your score back today."
+
+
+def no_data_factor() -> ReadinessFactor:
+    return ReadinessFactor(
+        key="data",
+        label="Not enough data yet",
+        impact="neutral",
+        detail="Log a few workouts and check in daily to sharpen this score",
+    )
+
+
 class RuleBasedScorer:
     """Starts from a base score and adds or subtracts points for each signal that is present."""
 
-    def __init__(self, rules: ReadinessRules = READINESS_RULES) -> None:
-        self.rules = rules
+    version = "rules-v1"
 
-    def score(self, features: ReadinessFeatures) -> ScoreResult:
-        contributions = [
+    def __init__(
+        self, rules: ReadinessRules = READINESS_RULES, fallback_reason: Optional[str] = None
+    ) -> None:
+        self.rules = rules
+        self.fallback_reason = fallback_reason
+
+    def info(self) -> ModelInfo:
+        return ModelInfo(
+            kind="rules",
+            version=self.version,
+            description="Deterministic rule-based scorer: a base score adjusted for each signal present.",
+            fallback_reason=self.fallback_reason,
+        )
+
+    def contributions(self, features: ReadinessFeatures) -> List[Contribution]:
+        """What each signal that is present adds or takes away, with the wording to show for it."""
+        return [
             c
             for c in (
                 self._load(features.acwr),
@@ -133,36 +187,25 @@ class RuleBasedScorer:
             )
             if c is not None
         ]
+
+    def score(self, features: ReadinessFeatures) -> ScoreResult:
+        contributions = self.contributions(features)
         total = self.rules.base_score + sum(c.delta for c in contributions)
         score = max(0, min(100, int(round(total))))
-        classification = self._classify(score)
+        classification = classify(score, self.rules)
 
         ranked = sorted(contributions, key=lambda c: abs(c.delta), reverse=True)
         factors = [c.factor for c in ranked[: self.rules.max_factors_shown]]
         if not factors:
-            factors = [
-                ReadinessFactor(
-                    key="data",
-                    label="Not enough data yet",
-                    impact="neutral",
-                    detail="Log a few workouts and check in daily to sharpen this score",
-                )
-            ]
+            factors = [no_data_factor()]
         return ScoreResult(
             score=score,
             classification=classification,
             factors=factors,
-            explanation=self._explain(classification, ranked),
+            explanation=explain(classification, ranked),
         )
 
-    def _classify(self, score: int) -> IntensityBand:
-        if score >= self.rules.push_min_score:
-            return "push"
-        if score >= self.rules.light_min_score:
-            return "light"
-        return "deload"
-
-    def _load(self, acwr: Optional[float]) -> Optional[_Contribution]:
+    def _load(self, acwr: Optional[float]) -> Optional[Contribution]:
         if acwr is None:
             return None
         r = self.rules
@@ -175,9 +218,9 @@ class RuleBasedScorer:
         else:
             delta = r.acwr_in_range_bonus
             detail = f"Acute:chronic ratio {acwr:.2f}, right in the productive range"
-        return _Contribution(delta, ReadinessFactor(key="load", label="Training load", impact=_impact(delta), detail=detail))
+        return Contribution(delta, ReadinessFactor(key="load", label="Training load", impact=impact_for(delta), detail=detail))
 
-    def _heart_rate(self, trend: Optional[float]) -> Optional[_Contribution]:
+    def _heart_rate(self, trend: Optional[float]) -> Optional[Contribution]:
         if trend is None:
             return None
         r = self.rules
@@ -190,25 +233,25 @@ class RuleBasedScorer:
         else:
             delta = 0.0
             detail = "Average heart rate in line with your recent baseline"
-        return _Contribution(delta, ReadinessFactor(key="hr_trend", label="Heart rate trend", impact=_impact(delta), detail=detail))
+        return Contribution(delta, ReadinessFactor(key="hr_trend", label="Heart rate trend", impact=impact_for(delta), detail=detail))
 
-    def _checkin(self, rating: Optional[int]) -> Optional[_Contribution]:
+    def _checkin(self, rating: Optional[int]) -> Optional[Contribution]:
         if rating is None:
             return None
         r = self.rules
         raw = -(rating - r.checkin_neutral_rating) * r.checkin_points_per_step
         delta = max(-r.checkin_penalty_cap, min(r.checkin_bonus_cap, raw))
-        return _Contribution(
+        return Contribution(
             delta,
             ReadinessFactor(
                 key="checkin",
                 label="Daily check-in",
-                impact=_impact(delta),
+                impact=impact_for(delta),
                 detail=f"Felt {rating} out of 5 on load",
             ),
         )
 
-    def _sleep(self, hours: Optional[float]) -> Optional[_Contribution]:
+    def _sleep(self, hours: Optional[float]) -> Optional[Contribution]:
         if hours is None:
             return None
         r = self.rules
@@ -218,9 +261,9 @@ class RuleBasedScorer:
             delta = r.sleep_bonus
         else:
             delta = 0.0
-        return _Contribution(delta, ReadinessFactor(key="sleep", label="Sleep", impact=_impact(delta), detail=f"{hours:.1f} h last night"))
+        return Contribution(delta, ReadinessFactor(key="sleep", label="Sleep", impact=impact_for(delta), detail=f"{hours:.1f} h last night"))
 
-    def _exam(self, days: Optional[int]) -> Optional[_Contribution]:
+    def _exam(self, days: Optional[int]) -> Optional[Contribution]:
         if days is None:
             return None
         r = self.rules
@@ -228,18 +271,4 @@ class RuleBasedScorer:
             return None
         delta = -(r.exam_window_days - days) / r.exam_window_days * r.exam_max_penalty
         detail = "Exam today" if days == 0 else f"Exam in {days} day{'s' if days != 1 else ''}"
-        return _Contribution(delta, ReadinessFactor(key="exam", label="Academic load", impact=_impact(delta), detail=detail))
-
-    def _explain(self, classification: IntensityBand, ranked: List[_Contribution]) -> str:
-        drags = [c for c in ranked if c.delta <= -1]
-        if not ranked:
-            return "Not enough data yet, so no adjustments are being made."
-        if classification == "deload":
-            label = drags[0].factor.label.lower() if drags else "several signals"
-            return f"Fatigue signals are stacking up, mainly {label}. Prioritise recovery today."
-        if classification == "light":
-            label = drags[0].factor.label if drags else "Your recent signals"
-            return f"{label} is holding your score back, so keep it easier today."
-        if drags:
-            return f"Mostly recovered. Keep an eye on {drags[0].factor.label.lower()}."
-        return "Well recovered. Nothing is holding your score back today."
+        return Contribution(delta, ReadinessFactor(key="exam", label="Academic load", impact=impact_for(delta), detail=detail))

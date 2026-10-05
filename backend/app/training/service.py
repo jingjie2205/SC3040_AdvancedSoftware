@@ -13,6 +13,7 @@ from .models import (
     GeneratePlanRequest,
     LogResult,
     LogWorkoutInput,
+    ModelInfo,
     PlanAdaptation,
     PlannedSession,
     ReadinessScore,
@@ -246,6 +247,9 @@ class TrainingService:
         self.repo.apply(user_id, ChangeSet(upsert_sessions=[updated]))
         return updated
 
+    def scorer_info(self) -> ModelInfo:
+        return self.scorer.info()
+
     def score_features(self, features: ReadinessFeatures) -> ScoreResult:
         return self.scorer.score(features)
 
@@ -353,7 +357,7 @@ class TrainingService:
         history = self.repo.list_workouts(user_id, today - timedelta(days=28), today - timedelta(days=1))
         records = [ActivityRecord(w.date, w.actual_volume, w.avg_hr, w.source) for w in history]
         features = build_features(records, self.repo.get_latest_checkin(user_id, today), today)
-        digest = fingerprint(features)
+        digest = fingerprint(features, self.scorer.version)
 
         cached = self.repo.get_cached_readiness(user_id, today)
         if cached and cached[1] == digest:

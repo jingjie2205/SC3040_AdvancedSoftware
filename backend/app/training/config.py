@@ -106,6 +106,10 @@ class ReadinessRules:
 
     max_factors_shown: int = 4
 
+    # Use the trained model when its artifact is present and matches these rules. Turn off to force
+    # the rule-based scorer, which is also what runs whenever the model can't be used.
+    use_trained_model: bool = True
+
 
 RULES = TrainingRules()
 READINESS_RULES = ReadinessRules()

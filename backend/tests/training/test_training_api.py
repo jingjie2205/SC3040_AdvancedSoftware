@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from app.commons.auth import deps
 from app.commons.auth.deps import get_current_user_id
 from app.training.clock import get_client_date
+from app.training import router as router_module
+from app.training.ml.scorer import ModelScorer, load_scorer
 from app.training.readiness import RuleBasedScorer
 from app.training.router import TRAINING_PREFIX, get_service, install, readiness_router, router
 from app.training.service import TrainingService
@@ -420,3 +422,42 @@ def test_responses_contain_every_field_the_frontend_types_declare(client, repo):
     for name, payload in checks.items():
         missing = _interface_fields(name) - set(payload)
         assert not missing, f"{name} is missing {sorted(missing)}"
+
+
+# ------------------------------------------------------------------ readiness model
+
+
+def test_the_model_endpoint_needs_a_token_and_holds_no_user_data(client):
+    assert client.get("/api/v1/readiness/model").status_code in (401, 403)
+    response = client.get("/api/v1/readiness/model", headers=headers())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "rules" and body["version"] == RuleBasedScorer.version
+    assert USER_A not in response.text
+
+
+def test_scoring_over_http_works_with_the_trained_model(app, repo):
+    app.dependency_overrides[get_service] = lambda: TrainingService(repo, load_scorer())
+    client = TestClient(app)
+
+    info = client.get("/api/v1/readiness/model", headers=headers()).json()
+    assert info["kind"] == "model" and "synthetic" in info["trainedOn"] and info["fallbackReason"] is None
+
+    response = client.post(
+        "/api/v1/readiness/score",
+        json={"acwr": 1.8, "sleepHours": 4, "checkinLoadRating": 5},
+        headers=headers(),
+    )
+    body = response.json()
+    assert response.status_code == 200
+    assert body["classification"] == "deload" and 0 <= body["score"] <= 100
+    assert body["factors"] and {"key", "label", "impact", "detail"} <= set(body["factors"][0])
+
+
+def test_the_app_as_deployed_builds_its_service_on_the_trained_model(monkeypatch):
+    monkeypatch.setattr(router_module, "create_repository", lambda: FakeTrainingRepository())
+    router_module._default_service.cache_clear()
+    try:
+        assert isinstance(router_module._default_service().scorer, ModelScorer)
+    finally:
+        router_module._default_service.cache_clear()

@@ -5,7 +5,7 @@ attaches it on write and drops it on read, so a row can't leak another user's id
 built for the wrong user by accident.
 """
 from datetime import date, datetime
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -129,6 +129,17 @@ class ScoreResult(ApiModel):
     classification: IntensityBand
     factors: List[ReadinessFactor]
     explanation: str
+
+
+class ModelInfo(ApiModel):
+    """Which scorer is producing readiness scores, and how much to trust it. Holds no user data."""
+
+    kind: Literal["model", "rules"]
+    version: str
+    description: str
+    trained_on: Optional[str] = None
+    metrics: Dict[str, float] = Field(default_factory=dict)
+    fallback_reason: Optional[str] = None
 
 
 class ReadinessScore(ScoreResult):

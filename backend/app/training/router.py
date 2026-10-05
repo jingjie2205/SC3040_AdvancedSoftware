@@ -14,6 +14,7 @@ from .models import (
     GeneratePlanRequest,
     LogResult,
     LogWorkoutInput,
+    ModelInfo,
     PlannedSession,
     RemoveResult,
     RescheduleRequest,
@@ -25,7 +26,8 @@ from .models import (
     TrainingPreferences,
     TrainingPreferencesInput,
 )
-from .readiness import ReadinessFeatures, RuleBasedScorer
+from .ml.scorer import load_scorer
+from .readiness import ReadinessFeatures
 from .repository import create_repository
 from .service import TrainingService
 
@@ -38,7 +40,7 @@ readiness_router = APIRouter(prefix=READINESS_PREFIX, tags=["Readiness"])
 
 @lru_cache
 def _default_service() -> TrainingService:
-    return TrainingService(create_repository(), RuleBasedScorer())
+    return TrainingService(create_repository(), load_scorer())
 
 
 def get_service() -> TrainingService:
@@ -145,6 +147,12 @@ def log_ad_hoc_session(body: LogWorkoutInput, user_id: UserId, today: Today, ser
 
 
 # --------------------------------------------------------------------------- readiness
+
+
+@readiness_router.get("/model", response_model=ModelInfo)
+def readiness_model(user_id: UserId, service: Service):
+    """Which scorer is live, what it was trained on and how it did. Nothing here is per user."""
+    return service.scorer_info()
 
 
 @readiness_router.post("/score", response_model=ScoreResult)

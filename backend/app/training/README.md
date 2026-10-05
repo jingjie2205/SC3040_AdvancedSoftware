@@ -23,6 +23,7 @@ local date as `X-Client-Date: YYYY-MM-DD` so "today" matches theirs (the server 
 | POST | `/training/sessions/{id}/log` | T-5 log a planned session |
 | POST | `/training/sessions` | T-5 log an ad hoc session |
 | POST | `/readiness/score` | Features in, score + classification + factors out. Stateless |
+| GET | `/readiness/model` | Which scorer is live (trained model or rules), what it was trained on, and why if it fell back. No user data |
 
 Errors are `{"detail": {"code", "message", "fieldErrors"?, "suggestedDate"?}}`. Validation
 failures use the same shape (status 422), including request-body validation on these paths.
@@ -36,6 +37,7 @@ failures use the same shape (status 422), including request-body validation on t
 | `planner.py` | Baseline, periodisation, session placement. Pure functions |
 | `rules.py` | Can a session move? Readiness vs plan reconciliation. Pure functions |
 | `readiness.py` | Feature builder and the `ReadinessScorer` interface with the rule-based scorer |
+| `ml/` | Stage 2: the trained readiness model, its training pipeline and its fallback. Start with `ml/README.md` |
 | `service.py` | Application logic. Takes `user_id` and `today` from the caller |
 | `repository.py` | Supabase access and the `ChangeSet` applied in one transaction |
 | `clock.py` | The client-date header ("today" as the user sees it) |
@@ -88,7 +90,7 @@ harness isn't part of the repo.
 
 | Rule | Where | Test |
 |---|---|---|
-| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. The scorer never reads `activities` | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py` |
+| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities` | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model) |
 | 2. Reconciliation is one-directional | `rules.reconcile` | `test_training_rules.py` (all nine band pairs) |
 | 3. Rebaseline on completed sessions | `planner.baseline_from_history` reads logged workouts only | `test_training_planner.py` |
 | 4. Readiness is private | Only `GET /today` and the stateless `/readiness/score` can return it; selects are scoped to the user | `test_training_api.py` walks the OpenAPI schema; `test_training_repository.py` |
@@ -99,8 +101,9 @@ harness isn't part of the repo.
 - **Missed sessions and auto-adaptation happen on read.** When the plan, schedule or today is
   requested, sessions whose day has passed unlogged become `missed`, and if that (or persistently
   low readiness) crosses a trigger the plan is adapted. It is idempotent and needs no scheduler.
-- **The readiness cache is keyed on its inputs.** A cached score is reused only while its feature
-  fingerprint is unchanged, so new history or a new check-in recomputes it without explicit invalidation.
+- **The readiness cache is keyed on its inputs and the scorer.** A cached score is reused only while
+  its feature fingerprint and the scorer's version are unchanged, so new history, a new check-in or a
+  switch between the model and the rules recomputes it without explicit invalidation.
 - **Baselines use the last 4 complete calendar weeks**, so no week is cut in half.
 - **One planned session per user per day**, enforced in the database.
 - **The profile sets the starting volume, never overrides history.** With under
@@ -123,5 +126,6 @@ harness isn't part of the repo.
   column, so it is deliberately not read.
 - **Exam load.** `ReadinessFeatures.days_until_exam` is supported by the scorer but nothing supplies it
   until the Settings page ships exam dates.
-- **Stage 2 readiness model.** Only the rule-based scorer exists. A trained model would replace
-  `RuleBasedScorer` behind the same `ReadinessScorer` interface.
+- **A model trained on real data.** Stage 2 exists (`ml/`), but it is trained on a synthetic cohort
+  labelled by the rules, so it reproduces them and is no more accurate. It needs real labelled
+  readiness data to be anything more; `ml/README.md` says how to retrain on it.
