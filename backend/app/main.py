@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .commons.config import get_settings
 from .controllers.users import router as users_router
 from .controllers.strava import router as strava_router
+from .controllers.gamification import router as gamification_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fitra.backend")
@@ -33,6 +34,7 @@ app.add_middleware(
 # ============================================================================
 app.include_router(users_router)
 app.include_router(strava_router)
+app.include_router(gamification_router)
 
 @app.get("/health", tags=["Health"])
 async def health_check():
