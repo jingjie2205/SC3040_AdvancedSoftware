@@ -84,6 +84,17 @@ export interface ReadinessScore {
   computedAt: string;
 }
 
+/** Which scorer is producing readiness scores. Mirrors GET /api/v1/readiness/model. */
+export interface ModelInfo {
+  kind: "model" | "rules";
+  version: string;
+  description: string;
+  trainedOn: string | null;
+  metrics: Record<string, number>;
+  /** Set when the trained model couldn't be used and the rules are scoring instead. */
+  fallbackReason: string | null;
+}
+
 export interface SessionRecommendation {
   activityType: ActivityType;
   intensityBand: IntensityBand;

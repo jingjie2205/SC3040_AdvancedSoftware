@@ -28,6 +28,7 @@ import type {
   TrainingPreferences,
 } from "@/lib/training/types";
 import { LogWorkoutDialog, type LogTarget } from "./log-workout-dialog";
+import { ScorerNote } from "./scorer-note";
 import {
   ACTIVITY_LABEL,
   ActivityIcon,
@@ -336,6 +337,8 @@ function ReadinessCard({ readiness }: { readiness: ReadinessScore }) {
           ))}
         </ul>
       </div>
+
+      <ScorerNote />
     </div>
   );
 }

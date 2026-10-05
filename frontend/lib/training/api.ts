@@ -13,6 +13,7 @@ import type { MoveRefusalCode } from "./rules";
 import type { LogWorkoutInput, TrainingPreferencesInput } from "./schemas";
 import type {
   ActivityType,
+  ModelInfo,
   PlannedSession,
   Schedule,
   TodayView,
@@ -79,6 +80,7 @@ export interface TrainingApi {
   removeSession(id: string): Promise<ApiResult<RemoveResult>>;
 
   getToday(): Promise<TodayView>;
+  getReadinessModel(): Promise<ModelInfo>;
   respondToSession(id: string, response: SessionResponse): Promise<ApiResult<PlannedSession>>;
   logSession(id: string, input: LogWorkoutInput): Promise<ApiResult<LogResult>>;
   logAdHocSession(input: LogWorkoutInput): Promise<ApiResult<LogResult>>;

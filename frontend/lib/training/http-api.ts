@@ -15,6 +15,7 @@ import type {
   TrainingApi,
 } from "./api";
 import type {
+  ModelInfo,
   PlannedSession,
   Schedule,
   TodayView,
@@ -24,6 +25,7 @@ import type {
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 const BASE_URL = `${BACKEND_URL}/api/v1/training`;
+const READINESS_URL = `${BACKEND_URL}/api/v1/readiness`;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -75,10 +77,15 @@ async function buildHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  base: string = BASE_URL,
+): Promise<ApiResult<T>> {
   let response: Response;
   try {
-    response = await fetch(`${BASE_URL}${path}`, {
+    response = await fetch(`${base}${path}`, {
       method,
       headers: await buildHeaders(),
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -99,8 +106,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return { ok: true, data: data as T };
 }
 
-async function read<T>(path: string): Promise<T> {
-  const result = await request<T>("GET", path);
+async function read<T>(path: string, base: string = BASE_URL): Promise<T> {
+  const result = await request<T>("GET", path, undefined, base);
   if (!result.ok) throw new Error(result.error.message);
   return result.data;
 }
@@ -125,6 +132,7 @@ export const httpTrainingApi: TrainingApi = {
   removeSession: (id) => request<RemoveResult>("DELETE", sessionPath(id)),
 
   getToday: () => read<TodayView>("/today"),
+  getReadinessModel: () => read<ModelInfo>("/model", READINESS_URL),
   respondToSession: (id, response) =>
     request<PlannedSession>("POST", `${sessionPath(id)}/respond`, response),
   logSession: (id, input) => request<LogResult>("POST", `${sessionPath(id)}/log`, input),

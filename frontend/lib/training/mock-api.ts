@@ -25,6 +25,7 @@ import type { LogWorkoutInput, TrainingPreferencesInput } from "./schemas";
 import type { ApiError, ApiResult, LogResult, TrainingApi } from "./api";
 import type {
   IntensityBand,
+  ModelInfo,
   PlannedSession,
   ReadinessScore,
   SessionRecommendation,
@@ -243,6 +244,18 @@ function validateLog(input: LogWorkoutInput): ApiResult<LogWorkoutInput> {
   }
   return ok(parsed.data);
 }
+
+/** What a healthy backend reports: the shipped model and its measured agreement with the rules. */
+const MOCK_MODEL: ModelInfo = {
+  kind: "model",
+  version: "mlp-v1",
+  description:
+    "Small neural network. It reproduces the rule-based scorer from data and was not trained on measured readiness, so it is no more accurate than the rules.",
+  trainedOn:
+    "synthetic cohort of 80,000 simulated athletes (seed 7), labelled by the rules-v1 rule-based scorer",
+  metrics: { mae_points: 0.4939, r2: 0.9964, class_agreement: 0.9888, within_3_points: 0.9992 },
+  fallbackReason: null,
+};
 
 export const mockTrainingApi: TrainingApi = {
   async getPreferences() {
@@ -484,6 +497,11 @@ export const mockTrainingApi: TrainingApi = {
         : "partial";
     const result: LogResult = { workout, session };
     return ok(result);
+  },
+
+  async getReadinessModel() {
+    await delay();
+    return clone(MOCK_MODEL);
   },
 
   async logAdHocSession(input) {
