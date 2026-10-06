@@ -10,7 +10,7 @@ def test_health_check():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "healthy"
-    assert data["service"] == "endurance-ai-backend"
+    assert data["service"] == "fitra-ai-backend"
 
 
 def test_strava_webhook_challenge_success():
@@ -19,7 +19,7 @@ def test_strava_webhook_challenge_success():
         params={
             "hub.mode": "subscribe",
             "hub.challenge": "challenge_token_xyz",
-            "hub.verify_token": "endurance_strava_verify_token",
+            "hub.verify_token": "fitra_strava_verify_token",
         },
     )
     assert response.status_code == 200

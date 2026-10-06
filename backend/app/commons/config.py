@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # App config
-    APP_NAME: str = "Endurance AI Backend"
+    APP_NAME: str = "FITRA Backend"
     ENVIRONMENT: str = "development"
     DEBUG: bool = False
     PORT: int = 8000
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # Strava API (OAuth & Webhooks)
     STRAVA_CLIENT_ID: str = ""
     STRAVA_CLIENT_SECRET: str = ""
-    STRAVA_VERIFY_TOKEN: str = "endurance_strava_verify_token"
+    STRAVA_VERIFY_TOKEN: str = "fitra_strava_verify_token"
 
     # Google Gemini AI
     GOOGLE_GENERATIVE_AI_API_KEY: str = ""
