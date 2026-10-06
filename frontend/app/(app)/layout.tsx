@@ -10,6 +10,7 @@ import {
   Sparkles,
   Trophy,
   User,
+  Settings,
 } from "lucide-react";
 
 // Mock data for now
@@ -34,6 +35,7 @@ export default function DashboardLayout({
     { name: "Nutrition", href: "/dashboard/nutrition", icon: Apple },
     { name: "AI Assistance", href: "/dashboard/ai", icon: Sparkles },
     { name: "Leaderboard", href: "/dashboard/leaderboard", icon: Trophy },
+    { name: "Settings", href: "/dashboard/settings", icon: Settings },
   ];
 
   return (
@@ -48,7 +50,7 @@ export default function DashboardLayout({
                 <Activity className="h-5 w-5 stroke-[2.5]" />
               </div>
               <span className="text-lg font-bold tracking-tight text-white">
-                Endurance<span className="text-emerald-400">AI</span>
+                FITRA<span className="text-emerald-400"></span>
               </span>
             </Link>
 

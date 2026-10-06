@@ -1,6 +1,6 @@
-# Endurance AI — Two-Tier Endurance Intelligence & Recovery Platform
+# FITRA — Two-Tier Endurance Intelligence & Recovery Platform
 
-> **Endurance AI** is a production-grade, two-tier endurance training analytics and recovery platform:
+> **FITRA** is a production-grade, two-tier endurance training analytics and recovery platform:
 > 1. **Frontend (`frontend/`):** Next.js 15+ App Router, React 19, TypeScript, Tailwind CSS, and Recharts delivering real-time workload matrixes, cardiac drift curves, and AI coaching summaries.
 > 2. **Backend (`backend/`):** Python FastAPI service powered by NumPy-vectorized Banister TRIMP & ACWR physiological modeling, an integrated Redis task consumer, and Google Gemini 2.5 Flash recovery synthesis.
 
@@ -25,7 +25,7 @@
 
 ## Overview
 
-Endurance athletes walk a fine line between fitness gains and overtraining injuries. **Endurance AI** automates physiological analysis and recovery prescription:
+Endurance athletes walk a fine line between fitness gains and overtraining injuries. **FITRA** automates physiological analysis and recovery prescription:
 - **Inbound Webhooks:** Strava activity events are accepted and queued into Redis in milliseconds.
 - **Vectorized Telemetry Processing:** High-frequency heart rate and time streams are processed using NumPy vectorization for Banister's TRIMP.
 - **Acute:Chronic Workload Ratio (ACWR):** 7-day fatigue vs. 28-day fitness rolling averages isolate overreaching and injury risk zones.

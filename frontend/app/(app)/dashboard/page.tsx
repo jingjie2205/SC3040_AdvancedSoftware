@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Apple,
   BadgeCheck,
-  Calendar,
+  //Calendar,
   Check,
   Flame,
   Footprints,
@@ -33,6 +33,8 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
+
+import Calendar from "../../components/calendar";
 
 /* ------------------------------------------------------------------ */
 /* Mock data                                                          */
@@ -90,8 +92,6 @@ const WEEKLY_FOOD = [
   { label: "Wk 6", intake: 2170, goal: 2300 },
 ];
 
-const CHECKIN_HISTORY = [true, true, true, false, true, true, true]; // last 7 days, oldest -> newest
-
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
@@ -142,11 +142,12 @@ function bmiCategory(bmi: number) {
 
 export default function HomePage() {
   // Health data
-  const [height, setHeight] = useState(178); // cm
-  const [weight, setWeight] = useState(74.5); // kg
+  const [height, setHeight] = useState<number | null>(null);
+  const [weight, setWeight] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
   const [editingHealth, setEditingHealth] = useState(false);
-  const [draftHeight, setDraftHeight] = useState(String(height));
-  const [draftWeight, setDraftWeight] = useState(String(weight));
+  const [userHeight, setUserHeight] = useState("");
+  const [userWeight, setUserWeight] = useState("");
 
   // Import state
   const [importingSource, setImportingSource] = useState<string | null>(null);
@@ -156,50 +157,73 @@ export default function HomePage() {
   const [trainingView, setTrainingView] = useState<TrainingView>("latest");
   const [foodView, setFoodView] = useState<FoodView>("daily");
 
-  // Check-in state
-  const [streak, setStreak] = useState(12);
-  const [checkedInToday, setCheckedInToday] = useState(false);
-
-  const bmi = useMemo(() => computeBmi(height, weight), [height, weight]);
-  const bmiInfo = bmiCategory(bmi);
+  const bmi = useMemo(() => {
+    if (height && weight) return computeBmi(height, weight);
+    return null;
+  }, [height, weight]);
+  const bmiInfo = bmi ? bmiCategory(bmi) : null;
 
   const trainingData =
     trainingView === "daily" ? DAILY_TRAINING : WEEKLY_TRAINING;
   const foodData = foodView === "daily" ? DAILY_FOOD : WEEKLY_FOOD;
 
+  useEffect(() => {
+    async function fetchUserData() {
+      setLoading(true);
+      try {
+        const response = await fetch("/api/user");
+        if (!response.ok) {
+          throw new Error("Failed to fetch user data");
+        }
+        const user = await response.json();
+        if (user.height) {
+          setHeight(user.height);
+          setUserHeight(String(user.height));
+        }
+        if (user.weight) {
+          setWeight(user.weight);
+          setUserWeight(String(user.weight));
+        }
+      } catch (error) {
+        console.error("Error fetching user data:", error);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchUserData();
+  }, []);
+
   function startEditHealth() {
-    setDraftHeight(String(height));
-    setDraftWeight(String(weight));
+    setUserHeight(height ? String(height) : "");
+    setUserWeight(weight ? String(weight) : "");
     setEditingHealth(true);
   }
 
-  function saveHealth() {
-    const h = parseFloat(draftHeight);
-    const w = parseFloat(draftWeight);
-    if (!Number.isNaN(h) && h > 0) setHeight(h);
-    if (!Number.isNaN(w) && w > 0) setWeight(w);
-    setEditingHealth(false);
-  }
+  async function saveHealth() {
+    const h = parseFloat(userHeight);
+    const w = parseFloat(userWeight);
 
-  function handleImport(source: "Samsung Health" | "Apple Health") {
-    setImportingSource(source);
-    setSyncMessage(null);
-    setTimeout(() => {
-      // Mock values "pulled" from the external service
-      const nextHeight = source === "Apple Health" ? 178 : 177.5;
-      const nextWeight = source === "Apple Health" ? 73.8 : 74.2;
-      setHeight(nextHeight);
-      setWeight(nextWeight);
-      setImportingSource(null);
-      setSyncMessage(`Synced height & weight from ${source}`);
-      setTimeout(() => setSyncMessage(null), 3500);
-    }, 1300);
-  }
+    try {
+      const response = await fetch("/api/user", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ height: h, weight: w }),
+      });
 
-  function handleCheckIn() {
-    if (checkedInToday) return;
-    setCheckedInToday(true);
-    setStreak((s) => s + 1);
+      if (!response.ok) {
+        throw new Error("Failed to update user data");
+      }
+
+      const updatedUser = await response.json();
+
+      setHeight(updatedUser.height);
+      setWeight(updatedUser.weight);
+      setEditingHealth(false);
+    } catch (error) {
+      console.error("Error saving health data:", error);
+    }
   }
 
   return (
@@ -233,35 +257,7 @@ export default function HomePage() {
                   Height, weight & body mass index
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                {/* Apple health button */}
-
-                <button
-                  onClick={() => handleImport("Apple Health")}
-                  disabled={importingSource !== null}
-                  className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/90 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-700 hover:text-white disabled:opacity-50"
-                >
-                  {importingSource === "Apple Health" ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-400" />
-                  ) : (
-                    <Apple className="h-3.5 w-3.5 text-slate-300" />
-                  )}
-                  Apple Health
-                </button>
-                {/* SamsungHealth button */}
-                <button
-                  onClick={() => handleImport("Samsung Health")}
-                  disabled={importingSource !== null}
-                  className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/90 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-700 hover:text-white disabled:opacity-50"
-                >
-                  {importingSource === "Samsung Health" ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-400" />
-                  ) : (
-                    <Watch className="h-3.5 w-3.5 text-slate-300" />
-                  )}
-                  Samsung Health
-                </button>
-              </div>
+              <div className="flex items-center gap-2"></div>
               {/* Edit button */}
               <div className="flex items-center gap-2">
                 {!editingHealth ? (
@@ -299,10 +295,18 @@ export default function HomePage() {
                     </span>
                   </div>
                   <div className="mt-2 text-2xl font-black text-white">
-                    {height}{" "}
-                    <span className="text-sm font-medium text-slate-400">
-                      cm
-                    </span>
+                    {loading ? (
+                      "-"
+                    ) : height ? (
+                      <>
+                        {height}{" "}
+                        <span className="text-sm font-medium text-slate-400">
+                          cm
+                        </span>
+                      </>
+                    ) : (
+                      "-"
+                    )}
                   </div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
@@ -312,30 +316,42 @@ export default function HomePage() {
                     </span>
                   </div>
                   <div className="mt-2 text-2xl font-black text-white">
-                    {weight}{" "}
-                    <span className="text-sm font-medium text-slate-400">
-                      kg
-                    </span>
+                    {loading ? (
+                      "-"
+                    ) : weight ? (
+                      <>
+                        {weight}{" "}
+                        <span className="text-sm font-medium text-slate-400">
+                          kg
+                        </span>
+                      </>
+                    ) : (
+                      "-"
+                    )}
                   </div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-slate-400">BMI</span>
-                    <span
-                      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${bmiInfo.bg} ${bmiInfo.color} border ${bmiInfo.border}`}
-                    >
-                      {bmiInfo.label}
-                    </span>
+                    {bmiInfo && (
+                      <span
+                        className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${bmiInfo.bg} ${bmiInfo.color} border ${bmiInfo.border}`}
+                      >
+                        {bmiInfo.label}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-2 text-2xl font-black text-white">
-                    {bmi.toFixed(1)}
+                    {loading ? "-" : bmi ? bmi.toFixed(1) : "-"}
                   </div>
-                  <div className="mt-2 w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                    <div
-                      className={`h-full ${bmiInfo.bar}`}
-                      style={{ width: `${Math.min(100, (bmi / 40) * 100)}%` }}
-                    />
-                  </div>
+                  {bmi && bmiInfo && (
+                    <div className="mt-2 w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className={`h-full ${bmiInfo.bar}`}
+                        style={{ width: `${Math.min(100, (bmi / 40) * 100)}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -344,8 +360,8 @@ export default function HomePage() {
                   <span className="text-xs text-slate-400">Height (cm)</span>
                   <input
                     type="number"
-                    value={draftHeight}
-                    onChange={(e) => setDraftHeight(e.target.value)}
+                    value={userHeight}
+                    onChange={(e) => setUserHeight(e.target.value)}
                     className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
                   />
                 </label>
@@ -353,8 +369,8 @@ export default function HomePage() {
                   <span className="text-xs text-slate-400">Weight (kg)</span>
                   <input
                     type="number"
-                    value={draftWeight}
-                    onChange={(e) => setDraftWeight(e.target.value)}
+                    value={userWeight}
+                    onChange={(e) => setUserWeight(e.target.value)}
                     className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
                   />
                 </label>
@@ -363,54 +379,8 @@ export default function HomePage() {
           </div>
 
           {/* Daily check-in */}
-          <div className="rounded-2xl border border-slate-800/80 bg-slate-900/60 p-6 backdrop-blur-md flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-bold text-white">
-                  Daily check-in
-                </h3>
-                <Flame className="h-4 w-4 text-orange-400" />
-              </div>
-              <div className="flex items-baseline gap-2">
-                <span className="text-3xl font-black text-white">{streak}</span>
-                <span className="text-xs text-slate-400">day streak</span>
-              </div>
-              <div className="mt-4 flex gap-1.5">
-                {CHECKIN_HISTORY.map((done, idx) => (
-                  <div
-                    key={idx}
-                    className={`h-6 w-6 rounded-md flex items-center justify-center ${
-                      done
-                        ? "bg-emerald-500/20 border border-emerald-500/30"
-                        : "bg-slate-800 border border-slate-700"
-                    }`}
-                  >
-                    {done && <Check className="h-3.5 w-3.5 text-emerald-400" />}
-                  </div>
-                ))}
-                <div className="h-6 w-6 rounded-md flex items-center justify-center bg-slate-800 border border-dashed border-slate-600">
-                  {checkedInToday && (
-                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                  )}
-                </div>
-              </div>
-            </div>
-            <button
-              onClick={handleCheckIn}
-              disabled={checkedInToday}
-              className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2.5 text-xs font-bold text-black shadow-lg shadow-emerald-500/20 transition hover:opacity-95 disabled:opacity-50"
-            >
-              {checkedInToday ? (
-                <>
-                  <BadgeCheck className="h-3.5 w-3.5" /> Checked in today
-                </>
-              ) : (
-                <>
-                  <Plus className="h-3.5 w-3.5" /> Check in today
-                </>
-              )}
-            </button>
-          </div>
+
+          <Calendar />
         </div>
 
         {/* Training overview */}
