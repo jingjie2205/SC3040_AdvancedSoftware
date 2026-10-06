@@ -10,6 +10,7 @@ import {
   Unplug
 } from "lucide-react";
 import ProfileForm from "./ProfileForm";
+import { disconnectStrava } from "./actions";
 
 export default async function SettingsPage({
   searchParams,
@@ -19,38 +20,33 @@ export default async function SettingsPage({
   // Await searchParams (required in Next.js 15) to determine the active tab
   const resolvedSearchParams = await searchParams;
   const activeTab = resolvedSearchParams.tab || "profile";
-7
+
   // Secure Authentication Check
-  // const supabase = await createClient();
-  // const { data: { session } } = await supabase.auth.getSession();
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
   
-  // if (!session) {
-  //   redirect("/login");
-  // }
+  if (!session) {
+    redirect("/login");
+  }
 
-  // Fetch User Profile for Strava Status
-  // const profileRes = await fetch("http://localhost:8000/api/v1/users/me", {
-  //   headers: {
-  //     Authorization: `Bearer ${session.access_token}`,
-  //   },
-  //   next: { tags: ['user-profile'] } 
-  // });
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+  const profileRes = await fetch(`${backendUrl}/users/me`, {
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    next: { tags: ['user-profile'] }
+  });
   
-  // const userProfile = profileRes.ok ? await profileRes.json() : null;
-  // const isStravaConnected = !!userProfile?.stravaAthleteId;
+  const userProfile = profileRes.ok ? await profileRes.json() : null;
 
-  // FOR TESTING PURPOSES
-  const isStravaConnected = true
-  const userProfile = true
+  const isStravaConnected = !!userProfile?.isStravaConnected;
 
   const clientId = process.env.NEXT_PUBLIC_STRAVA_CLIENT_ID; 
   const redirectUri = process.env.NEXT_PUBLIC_STRAVA_REDIRECT_URI;
 
-  if (!clientId || !redirectUri) {
-    throw new Error("Missing Strava environment variables");
-  }
-
-  const authUrl = `https://www.strava.com/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${redirectUri}&approval_prompt=force&scope=activity:read_all,profile:read_all`;
+  const authUrl = clientId && redirectUri
+    ? `https://www.strava.com/oauth/authorize?${new URLSearchParams({ client_id: clientId, response_type: "code", redirect_uri: redirectUri, approval_prompt: "force", scope: "activity:read_all,profile:read_all" })}`
+    : null;
 
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -66,7 +62,7 @@ export default async function SettingsPage({
         {/* Sidebar Navigation */}
         <div className="space-y-1">
           <Link 
-            href="/settings?tab=profile"
+            href="/dashboard/settings?tab=profile"
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg font-medium text-sm transition-colors ${
               activeTab === "profile" 
                 ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
@@ -77,7 +73,7 @@ export default async function SettingsPage({
             Profile & Metrics
           </Link>
           <Link 
-            href="/settings?tab=integrations"
+            href="/dashboard/settings?tab=integrations"
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg font-medium text-sm transition-colors ${
               activeTab === "integrations" 
                 ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
@@ -92,8 +88,8 @@ export default async function SettingsPage({
         {/* Settings Content Area */}
         <div className="md:col-span-2 space-y-6">
           
-          {/* TDEE Profile Engine Component */}
-          {activeTab === "profile" && <ProfileForm />}
+          {/* pass user data for rendering */}
+          {activeTab === "profile" && <ProfileForm initialData={userProfile} />}
           
           {/* Strava Integration Card */}
           {activeTab === "integrations" && (
@@ -126,27 +122,21 @@ export default async function SettingsPage({
                 {isStravaConnected ? (
                   <div className="flex items-center justify-between flex-wrap gap-4">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-800 border border-slate-700">
-                        <User className="h-5 w-5 text-slate-400" />
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                        <CheckCircle2 className="h-5 w-5 text-emerald-400" />
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-slate-200">
-                          {userProfile?.stravaFirstName || "Strava Athlete"}
-                        </p>
-                        <p className="text-xs text-slate-500">ID: {userProfile?.stravaAthleteId}</p>
+                        <p className="text-sm font-medium text-slate-200">Account Linked</p>
+                        <p className="text-xs text-slate-500">Telemetry sync is active</p>
                       </div>
                     </div>
-                    
-                    <form action={async () => {
-                      "use server";
-                      // Note: This requires a POST /api/v1/strava/disconnect endpoint in FastAPI
-                      await fetch("http://localhost:8000/api/v1/strava/disconnect", {
-                        method: "POST",
-                        headers: { Authorization: `Bearer ${session.access_token}` }
-                      });
-                      redirect("/settings?tab=integrations");
-                    }}>
-                      <button type="submit" className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-2 text-xs font-medium text-slate-300 transition hover:bg-slate-800 hover:text-red-400 hover:border-red-900/50">
+
+                    {/* Native Server Action form - no extra components or toast logic needed */}
+                    <form action={disconnectStrava}>
+                      <button
+                        type="submit"
+                        className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-2 text-xs font-medium text-slate-300 transition hover:bg-slate-800 hover:text-red-400 hover:border-red-900/50"
+                      >
                         <Unplug className="h-3.5 w-3.5" />
                         Disconnect
                       </button>
@@ -157,13 +147,13 @@ export default async function SettingsPage({
                     <p className="text-sm text-slate-400 max-w-sm">
                       Connect your account to enable TRIMP tracking, ACWR modeling, and AI coach analysis.
                     </p>
-                    <Link
+                    {authUrl ? <Link
                       href={authUrl}
                       className="flex items-center gap-2 rounded-lg bg-[#FC4C02] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#FC4C02]/20 transition hover:bg-[#E34402]"
                     >
                       Connect Strava
                       <ArrowRight className="h-4 w-4" />
-                    </Link>
+                    </Link> : <p className="text-sm text-slate-400">Strava connection is not configured yet.</p>}
                   </div>
                 )}
               </div>

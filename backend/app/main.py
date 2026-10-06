@@ -7,6 +7,8 @@ from .commons.config import get_settings
 from .controllers.users import router as users_router
 from .controllers.strava import router as strava_router
 from .controllers.checkin import router as checkin_router
+from .controllers.gamification import router as gamification_router
+from .controllers.nutrition import router as nutrition_router
 from .training import install as install_training_routes
 
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +38,8 @@ app.add_middleware(
 app.include_router(users_router)
 app.include_router(strava_router)
 app.include_router(checkin_router)
+app.include_router(gamification_router)
+app.include_router(nutrition_router)
 install_training_routes(app)
 
 @app.get("/health", tags=["Health"])

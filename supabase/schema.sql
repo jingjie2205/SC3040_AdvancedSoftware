@@ -1,3 +1,5 @@
+-- Legacy scaffold: not the shared team database schema.
+-- Meal analysis now uses migrations/20261008_team_meal_tables.sql on the existing team tables.
 -- Supabase PostgreSQL Schema for AI-Driven Endurance Platform
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -107,3 +109,133 @@ CREATE POLICY "Users can view own loads"
 CREATE POLICY "Users can view own recommendations"
     ON public.ai_recommendations FOR SELECT
     USING (auth.uid() = user_id);
+
+-- ============================================================================
+-- Gamification (G-1 to G-4)
+-- XP, streaks and check-ins are written only by the backend (service role) so
+-- clients cannot award themselves XP; RLS therefore grants SELECT only.
+-- ============================================================================
+
+-- Running totals per user; rank is derived from total_xp, not stored
+CREATE TABLE IF NOT EXISTS public.gamification_stats (
+    user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    total_xp INTEGER NOT NULL DEFAULT 0 CHECK (total_xp >= 0),
+    current_streak INTEGER NOT NULL DEFAULT 0 CHECK (current_streak >= 0),
+    longest_streak INTEGER NOT NULL DEFAULT 0 CHECK (longest_streak >= 0),
+    last_check_in_date DATE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Interactive daily check-in questionnaire (1 = low, 5 = high)
+CREATE TABLE IF NOT EXISTS public.daily_checkins (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    date DATE NOT NULL,
+    muscle_fatigue SMALLINT NOT NULL CHECK (muscle_fatigue BETWEEN 1 AND 5),
+    mood SMALLINT NOT NULL CHECK (mood BETWEEN 1 AND 5),
+    diet_adherence SMALLINT NOT NULL CHECK (diet_adherence BETWEEN 1 AND 5),
+    xp_awarded INTEGER NOT NULL DEFAULT 0 CHECK (xp_awarded >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(user_id, date)
+);
+
+-- Append-only XP ledger; total_xp in gamification_stats is the sum of these
+CREATE TABLE IF NOT EXISTS public.xp_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('checkin', 'workout', 'meal', 'challenge')),
+    source_id UUID,
+    amount INTEGER NOT NULL CHECK (amount > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Shared fitness challenges between friends. Progress is not stored: it is computed
+-- from xp_events and daily_checkins within [start_date, end_date] when read.
+CREATE TABLE IF NOT EXISTS public.challenges (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    creator_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    title TEXT NOT NULL CHECK (char_length(title) BETWEEN 1 AND 100),
+    metric TEXT NOT NULL CHECK (metric IN ('sessions', 'checkin_streak', 'xp')),
+    target_value INTEGER NOT NULL CHECK (target_value > 0),
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (end_date >= start_date)
+);
+
+CREATE TABLE IF NOT EXISTS public.challenge_participants (
+    challenge_id UUID REFERENCES public.challenges(id) ON DELETE CASCADE NOT NULL,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited', 'accepted', 'declined')),
+    joined_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (challenge_id, user_id)
+);
+
+-- Prevents the same workout/meal/check-in from being awarded XP twice
+CREATE UNIQUE INDEX IF NOT EXISTS idx_xp_events_source_unique
+    ON public.xp_events(source, source_id) WHERE source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_xp_events_user_date ON public.xp_events(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gamification_stats_xp ON public.gamification_stats(total_xp DESC);
+CREATE INDEX IF NOT EXISTS idx_challenge_participants_user ON public.challenge_participants(user_id);
+
+ALTER TABLE public.gamification_stats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.daily_checkins ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.xp_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.challenges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.challenge_participants ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view own gamification stats"
+    ON public.gamification_stats FOR SELECT
+    USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can view own check-ins"
+    ON public.daily_checkins FOR SELECT
+    USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can view own XP events"
+    ON public.xp_events FOR SELECT
+    USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can view challenges they created or joined"
+    ON public.challenges FOR SELECT
+    USING (
+        auth.uid() = creator_id
+        OR EXISTS (
+            SELECT 1 FROM public.challenge_participants cp
+            WHERE cp.challenge_id = challenges.id AND cp.user_id = auth.uid()
+        )
+    );
+
+CREATE POLICY "Users can view own challenge participation"
+    ON public.challenge_participants FOR SELECT
+    USING (auth.uid() = user_id);
+CREATE TABLE IF NOT EXISTS public.meals (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    meal_name TEXT NOT NULL CHECK (length(trim(meal_name)) BETWEEN 1 AND 160),
+    meal_type TEXT NOT NULL CHECK (meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')),
+    total_calories NUMERIC NOT NULL CHECK (total_calories >= 0),
+    protein_g NUMERIC NOT NULL CHECK (protein_g >= 0),
+    carbs_g NUMERIC NOT NULL CHECK (carbs_g >= 0),
+    fat_g NUMERIC NOT NULL CHECK (fat_g >= 0),
+    confidence_score REAL NOT NULL CHECK (confidence_score BETWEEN 0 AND 1),
+    training_context_note TEXT NOT NULL DEFAULT '',
+    breakdown JSONB NOT NULL CHECK (jsonb_typeof(breakdown) = 'array'),
+    logged_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_meals_user_logged ON public.meals(user_id, logged_at DESC);
+ALTER TABLE public.meals ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view own meals" ON public.meals;
+CREATE POLICY "Users can view own meals" ON public.meals FOR SELECT TO authenticated USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Users can insert own meals" ON public.meals;
+CREATE POLICY "Users can insert own meals" ON public.meals FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Users can update own meals" ON public.meals;
+CREATE POLICY "Users can update own meals" ON public.meals FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Users can delete own meals" ON public.meals;
+CREATE POLICY "Users can delete own meals" ON public.meals FOR DELETE TO authenticated USING (auth.uid() = user_id);
+
+-- NULL means calorie burn has not been imported, rather than no energy expended.
+ALTER TABLE public.activities ADD COLUMN IF NOT EXISTS calories NUMERIC CHECK (calories >= 0);
