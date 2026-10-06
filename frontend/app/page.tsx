@@ -1,5 +1,14 @@
 import Link from "next/link";
-import { Activity, Zap, Cpu, ShieldCheck, ArrowRight, LineChart, HeartHandshake, Layers } from "lucide-react";
+import {
+  Activity,
+  Zap,
+  Cpu,
+  ShieldCheck,
+  ArrowRight,
+  LineChart,
+  HeartHandshake,
+  Layers,
+} from "lucide-react";
 
 export default function HomePage() {
   return (
@@ -15,7 +24,7 @@ export default function HomePage() {
             <Activity className="h-5 w-5 stroke-[2.5]" />
           </div>
           <span className="text-xl font-bold tracking-tight text-white">
-            Endurance<span className="text-emerald-400">AI</span>
+            FITRA<span className="text-emerald-400"></span>
           </span>
         </div>
         <div className="flex items-center gap-4">
@@ -50,7 +59,9 @@ export default function HomePage() {
         </h1>
 
         <p className="mx-auto mt-6 max-w-2xl text-lg text-slate-400 sm:text-xl">
-          Automated Strava webhook ingestion, stream-level Banister TRIMP calculation, Acute:Chronic Workload Ratio (ACWR) modeling, and Gemini 2.5 Flash recovery synthesis.
+          Automated Strava webhook ingestion, stream-level Banister TRIMP
+          calculation, Acute:Chronic Workload Ratio (ACWR) modeling, and Gemini
+          2.5 Flash recovery synthesis.
         </p>
 
         <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
@@ -75,9 +86,13 @@ export default function HomePage() {
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
               <LineChart className="h-6 w-6" />
             </div>
-            <h3 className="mt-4 text-lg font-bold text-white">Banister TRIMP Telemetry</h3>
+            <h3 className="mt-4 text-lg font-bold text-white">
+              Banister TRIMP Telemetry
+            </h3>
             <p className="mt-2 text-sm text-slate-400 leading-relaxed">
-              Integrates heart-rate stream data second-by-second using gender-weighted exponential impulse formulas to accurately quantify internal training stress.
+              Integrates heart-rate stream data second-by-second using
+              gender-weighted exponential impulse formulas to accurately
+              quantify internal training stress.
             </p>
           </div>
 
@@ -85,9 +100,13 @@ export default function HomePage() {
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-400">
               <Layers className="h-6 w-6" />
             </div>
-            <h3 className="mt-4 text-lg font-bold text-white">ACWR Sweet Spot (0.8 - 1.3)</h3>
+            <h3 className="mt-4 text-lg font-bold text-white">
+              ACWR Sweet Spot (0.8 - 1.3)
+            </h3>
             <p className="mt-2 text-sm text-slate-400 leading-relaxed">
-              Compares 7-day acute fatigue against 28-day chronic fitness to protect athletes from overtraining spikes and reduce injury incidence.
+              Compares 7-day acute fatigue against 28-day chronic fitness to
+              protect athletes from overtraining spikes and reduce injury
+              incidence.
             </p>
           </div>
 
@@ -95,9 +114,13 @@ export default function HomePage() {
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-500/10 text-purple-400">
               <Cpu className="h-6 w-6" />
             </div>
-            <h3 className="mt-4 text-lg font-bold text-white">Gemini 2.5 Flash Coach</h3>
+            <h3 className="mt-4 text-lg font-bold text-white">
+              Gemini 2.5 Flash Coach
+            </h3>
             <p className="mt-2 text-sm text-slate-400 leading-relaxed">
-              Generates structured daily readiness diagnostics, recovery status, and tailored workout prescriptions formatted directly for optimal adaptation.
+              Generates structured daily readiness diagnostics, recovery status,
+              and tailored workout prescriptions formatted directly for optimal
+              adaptation.
             </p>
           </div>
         </div>
@@ -110,20 +133,32 @@ export default function HomePage() {
           </div>
           <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-4 text-xs font-mono text-slate-300">
             <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
-              <span className="text-emerald-400 font-bold">1. Strava Webhook</span>
-              <p className="mt-1 text-slate-400 font-sans">Receives activity event and fast-acks &lt;500ms.</p>
+              <span className="text-emerald-400 font-bold">
+                1. Strava Webhook
+              </span>
+              <p className="mt-1 text-slate-400 font-sans">
+                Receives activity event and fast-acks &lt;500ms.
+              </p>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
               <span className="text-cyan-400 font-bold">2. Upstash QStash</span>
-              <p className="mt-1 text-slate-400 font-sans">Asynchronous HTTP push queue with signature verification.</p>
+              <p className="mt-1 text-slate-400 font-sans">
+                Asynchronous HTTP push queue with signature verification.
+              </p>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
               <span className="text-amber-400 font-bold">3. Supabase DB</span>
-              <p className="mt-1 text-slate-400 font-sans">Token rotation, stream persistence, and load aggregation.</p>
+              <p className="mt-1 text-slate-400 font-sans">
+                Token rotation, stream persistence, and load aggregation.
+              </p>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
-              <span className="text-purple-400 font-bold">4. Vercel AI SDK</span>
-              <p className="mt-1 text-slate-400 font-sans">Gemini 2.5 Flash structured synthesis and actionable plans.</p>
+              <span className="text-purple-400 font-bold">
+                4. Vercel AI SDK
+              </span>
+              <p className="mt-1 text-slate-400 font-sans">
+                Gemini 2.5 Flash structured synthesis and actionable plans.
+              </p>
             </div>
           </div>
         </div>
