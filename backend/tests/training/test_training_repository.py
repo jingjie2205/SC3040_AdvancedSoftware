@@ -170,12 +170,6 @@ def test_missing_rows_come_back_as_none_or_empty():
     assert repo.list_sessions(USER_A, DAY, DAY) == []
 
 
-def test_no_check_in_source_exists_yet():
-    repo, client = repo_with()
-    assert repo.get_latest_checkin(USER_A, DAY) is None
-    assert client.queries == []  # it doesn't guess at a table that isn't there
-
-
 # ------------------------------------------------------------------ one transaction, no user id in the rows
 
 

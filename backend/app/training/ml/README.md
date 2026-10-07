@@ -76,9 +76,12 @@ when:
 - `READINESS_RULES.use_trained_model` is `False`;
 - the file is missing, malformed, has non-finite weights, or was trained on a different feature
   encoding;
-- **the readiness rules in `config.py` have changed since the model was trained.** This is
+- **the scoring rules in `config.py` have changed since the model was trained.** This is
   intentional: QA varies those thresholds to test behaviour, and a model trained on the old values
-  would silently ignore the change. Retrain after changing a rule you intend to keep.
+  would silently ignore the change. Retrain after changing a rule you intend to keep. Settings that
+  only change what is shown or which inputs are used (`max_factors_shown`, `use_trained_model`,
+  `checkin_max_age_days`) are not scoring rules and don't retire the model; a test enforces that every
+  other setting does.
 
 The scorer's version is part of the readiness cache key, so switching scorers recomputes today's
 score instead of serving the previous scorer's answer.

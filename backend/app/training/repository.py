@@ -8,8 +8,8 @@ single Postgres function in one transaction, so a failure never leaves a partial
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import date
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from datetime import date, timedelta
+from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 
 from postgrest.exceptions import APIError
 from supabase import Client
@@ -30,6 +30,20 @@ logger = logging.getLogger(__name__)
 
 # Postgres and PostgREST codes for "that table or column doesn't exist (yet)".
 _SCHEMA_NOT_READY = {"42P01", "42703", "PGRST204", "PGRST205"}
+
+# The check-in questionnaire dates a check-in with a fixed UTC+8 day, while "today" here is the
+# user's own local date. For someone west of Singapore a check-in made this evening can be dated
+# tomorrow, so look one day ahead.
+_CHECKIN_DATE_SKEW_DAYS = 1
+
+_warned: Set[str] = set()
+
+
+def _warn_once(key: str, message: str, *args: Any) -> None:
+    """Readiness and plans are read on every page load, so say a missing table once, not every time."""
+    if key not in _warned:
+        _warned.add(key)
+        logger.warning(message, *args)
 
 
 @dataclass
@@ -156,16 +170,38 @@ class SupabaseTrainingRepository:
             if error.code not in _SCHEMA_NOT_READY:
                 raise
             # The table or column isn't there (yet). Plans fall back to the default baseline.
-            logger.warning("Profile not readable (%s); using the default baseline", error.code)
+            _warn_once(f"profile:{error.code}", "Profile not readable (%s); using the default baseline", error.code)
             return None
         return AthleteProfile(activity_level=row.get("activity_level")) if row else None
 
     # ------------------------------------------------------------------ readiness
 
     def get_latest_checkin(self, user_id: str, on_or_before: date) -> Optional[Checkin]:
-        # `daily_checkins` is owned by the Home page and doesn't exist yet. Until it does there is
-        # no check-in to read, and the scorer simply leaves those signals out.
-        return None
+        # `daily_checkins` is the gamification questionnaire. Only the muscle soreness answer is read,
+        # never mood or diet, and only for this user. Whether it is recent enough to count is decided
+        # when the features are built, not here. There is no sleep answer, so sleep stays unknown.
+        newest = on_or_before + timedelta(days=_CHECKIN_DATE_SKEW_DAYS)
+        try:
+            row = self._first(
+                self.db.table("daily_checkins")
+                .select("date,muscle_fatigue")
+                .eq("user_id", user_id)
+                .lte("date", newest.isoformat())
+                .order("date", desc=True)
+            )
+        except APIError as error:
+            if error.code not in _SCHEMA_NOT_READY:
+                raise
+            # The table isn't there (yet), so there is no check-in and the signal is left out.
+            _warn_once(f"checkin:{error.code}", "Check-ins not readable (%s); scoring without them", error.code)
+            return None
+        if not row:
+            return None
+        rating = row.get("muscle_fatigue")
+        if isinstance(rating, bool) or not isinstance(rating, int) or not 1 <= rating <= 5:
+            _warn_once("checkin:bad-rating", "Ignoring a check-in whose muscle_fatigue is %r", rating)
+            return None
+        return Checkin(load_rating=rating, sleep_hours=None, day=date.fromisoformat(str(row["date"])[:10]))
 
     def get_cached_readiness(
         self, user_id: str, day: date

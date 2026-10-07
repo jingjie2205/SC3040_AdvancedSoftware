@@ -106,6 +106,12 @@ harness isn't part of the repo.
   switch between the model and the rules recomputes it without explicit invalidation.
 - **Baselines use the last 4 complete calendar weeks**, so no week is cut in half.
 - **One planned session per user per day**, enforced in the database.
+- **The daily check-in feeds readiness.** The check-in rating is `daily_checkins.muscle_fatigue` from
+  the gamification questionnaire ("How sore are your muscles?", 1 "Fresh" to 5 "Very sore", so higher
+  is worse, the same direction as the score expects). Only that column and the date are read, only for the
+  user, and never mood or diet. A check-in counts while it is from today or yesterday
+  (`checkin_max_age_days`); an older one is ignored. If the table isn't in the database, readiness runs
+  without it and one warning is logged.
 - **The profile sets the starting volume, never overrides history.** With under
   `min_history_weeks_for_baseline` weeks of logged training, the baseline starts from the user's
   `activity_level` (`config.default_baseline_by_activity_level`), so a sedentary beginner isn't given
@@ -117,9 +123,10 @@ harness isn't part of the repo.
 
 ## Not built yet, and who it depends on
 
-- **Check-ins and sleep.** `daily_checkins` (Home page) doesn't exist, so readiness runs without
-  those signals. `SupabaseTrainingRepository.get_latest_checkin` is the one place to wire it in.
-  `load_rating` is treated as perceived load from 1 to 5, higher meaning worse. Confirm with the owner.
+- **Sleep.** Nothing records it (the check-in has no sleep question), so the sleep signal is always left
+  out. The scorer supports it; `SupabaseTrainingRepository.get_latest_checkin` is where it would be read.
+- **Mood and diet answers.** The check-in collects them but readiness doesn't use them. Using them means
+  new model features and retraining.
 - **Fitness goal.** T-2 lists it as an input, but `users.fitness_goal` is free text, so nothing
   interprets it. It needs a fixed list of goals from the Settings page before it can shape a plan.
 - **`activities.source`.** The dashboard's `activities` table is Strava-only and has no `source`

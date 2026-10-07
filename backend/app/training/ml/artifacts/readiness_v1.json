@@ -6,7 +6,7 @@
  "trained_on": "synthetic cohort of 80,000 simulated athletes (seed 7), labelled by the rules-v1 rule-based scorer",
  "teacher": {
   "scorer": "rules-v1",
-  "rules_hash": "748ac71c2d77a57f"
+  "rules_hash": "8216a996d3ed99e9"
  },
  "training": {
   "seed": 7,

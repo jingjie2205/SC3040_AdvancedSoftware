@@ -94,6 +94,9 @@ class ReadinessRules:
     checkin_points_per_step: float = 4.0
     checkin_bonus_cap: float = 4.0
     checkin_penalty_cap: float = 12.0
+    # A check-in only counts toward today's score while it is at most this many days old
+    # (0 means today's only). Soreness reported last week says nothing about today.
+    checkin_max_age_days: int = 1
 
     sleep_target_hours: float = 7.0
     sleep_bonus_hours: float = 8.0

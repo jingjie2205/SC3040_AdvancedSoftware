@@ -189,7 +189,7 @@ function readinessFixture(date: string, plannedBand: IntensityBand | null): Read
         { key: "load", label: "Training load", impact: "positive", detail: "Acute:chronic ratio 1.05, right in the productive range" },
         { key: "sleep", label: "Sleep", impact: "positive", detail: "8.1 h last night" },
         { key: "rhr", label: "Resting heart rate", impact: "positive", detail: "1 bpm below your 14-day baseline" },
-        { key: "checkin", label: "Daily check-in", impact: "neutral", detail: "Felt 4 out of 5" },
+        { key: "checkin", label: "Daily check-in", impact: "neutral", detail: "Muscle soreness 4 out of 5" },
       ],
     };
   }
@@ -203,7 +203,7 @@ function readinessFixture(date: string, plannedBand: IntensityBand | null): Read
       { key: "load", label: "Training load", impact: "negative", detail: "Acute:chronic ratio 1.32, above your usual range" },
       { key: "sleep", label: "Sleep", impact: "negative", detail: "5.9 h last night" },
       { key: "rhr", label: "Resting heart rate", impact: "neutral", detail: "2 bpm above your 14-day baseline" },
-      { key: "checkin", label: "Daily check-in", impact: "positive", detail: "Felt 4 out of 5" },
+      { key: "checkin", label: "Daily check-in", impact: "positive", detail: "Muscle soreness 4 out of 5" },
     ],
   };
 }
