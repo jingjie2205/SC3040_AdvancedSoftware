@@ -45,14 +45,29 @@ failures use the same shape (status 422), including request-body validation on t
 
 ## Turning it on against a real Supabase project
 
-1. **Apply the migration.** Run `supabase/migrations/20260930000000_training_routine.sql` in the
+1. **Look for collisions first.** `create table if not exists` silently skips a table that already
+   exists, and the migration would then fail on columns that aren't there. When the live project was
+   checked (2026-10-07) it held the original ERD schema, including empty `training_plans`,
+   `workout_sessions` and `exercises` tables. That is why this migration's plan and workout tables are
+   named `training_routine_plans` and `training_workout_logs`. Before running it anywhere, in the SQL editor:
+   ```sql
+   select table_name from information_schema.tables
+   where table_schema = 'public'
+     and table_name in ('training_preferences','training_routine_plans','planned_sessions','training_workout_logs','readiness_scores');
+   -- expect no rows
+
+   select proname from pg_proc where proname = 'training_apply_changes';
+   -- expect no rows
+   ```
+2. **Apply the migration.** Run `supabase/migrations/20260930000000_training_routine.sql` in the
    Supabase SQL editor (or `supabase db push`). It needs only `auth.users`; it does not touch the
-   dashboard tables in `schema.sql`.
-2. **Check it landed.** In the SQL editor:
+   dashboard tables in `schema.sql`. A script runs as one transaction, so an error changes nothing, but
+   it is not safe to run twice (the `create policy` lines have no `if not exists`).
+3. **Check it landed.** In the SQL editor:
    ```sql
    select tablename, rowsecurity from pg_tables
    where schemaname = 'public'
-     and tablename in ('training_preferences','training_plans','planned_sessions','workout_sessions','readiness_scores');
+     and tablename in ('training_preferences','training_routine_plans','planned_sessions','training_workout_logs','readiness_scores');
    -- expect 5 rows, all rowsecurity = true
 
    select has_function_privilege('anon', 'public.training_apply_changes(uuid, jsonb)', 'execute') as anon,
@@ -60,15 +75,16 @@ failures use the same shape (status 422), including request-body validation on t
           has_function_privilege('service_role', 'public.training_apply_changes(uuid, jsonb)', 'execute') as service_role;
    -- expect false, false, true
    ```
-3. **Backend environment** (`backend/.env`):
+4. **Backend environment** (`backend/.env`):
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY` (server only; never a `NEXT_PUBLIC_` variable)
    Who the caller is comes from the team's shared `get_current_user_id`
    (`app/commons/auth/deps.py`): it asks Supabase Auth to resolve the bearer token, so no JWT secret is
    needed here. A missing, malformed or unrecognised token is a 401.
-4. **Frontend**: set `NEXT_PUBLIC_TRAINING_API=http` (and `NEXT_PUBLIC_BACKEND_URL` if it isn't
+5. **Frontend**: set `NEXT_PUBLIC_TRAINING_API=http` (and `NEXT_PUBLIC_BACKEND_URL` if it isn't
    `http://localhost:8000`). Without the flag the page runs on in-memory fixtures.
-5. **Smoke test** with a real access token:
+6. **Smoke test** with a real access token (sign in through the login page, or copy the access token of a
+   signed-in session):
    ```
    curl -H "Authorization: Bearer <access token>" -H "X-Client-Date: <today>" http://localhost:8000/api/v1/training/preferences
    ```

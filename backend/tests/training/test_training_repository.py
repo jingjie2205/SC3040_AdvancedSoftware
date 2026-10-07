@@ -105,11 +105,11 @@ def scoped_to_user(query) -> bool:
 
 @pytest.mark.parametrize("call,table", [
     (lambda r: r.get_preferences(USER_A), "training_preferences"),
-    (lambda r: r.get_active_plan(USER_A), "training_plans"),
+    (lambda r: r.get_active_plan(USER_A), "training_routine_plans"),
     (lambda r: r.list_sessions(USER_A, DAY, DAY), "planned_sessions"),
     (lambda r: r.get_session(USER_A, "s1"), "planned_sessions"),
-    (lambda r: r.list_workouts(USER_A, DAY, DAY), "workout_sessions"),
-    (lambda r: r.get_workout_for_session(USER_A, "s1"), "workout_sessions"),
+    (lambda r: r.list_workouts(USER_A, DAY, DAY), "training_workout_logs"),
+    (lambda r: r.get_workout_for_session(USER_A, "s1"), "training_workout_logs"),
     (lambda r: r.get_cached_readiness(USER_A, DAY), "readiness_scores"),
     (lambda r: r.list_readiness(USER_A, DAY, DAY), "readiness_scores"),
 ])
@@ -150,8 +150,8 @@ def test_single_row_writes_carry_the_users_id():
 
 def test_rows_as_postgres_returns_them_become_models():
     repo, _ = repo_with({
-        "planned_sessions": [SESSION_ROW], "workout_sessions": [WORKOUT_ROW],
-        "training_plans": [PLAN_ROW], "training_preferences": [PREFS_ROW], "readiness_scores": [READINESS_ROW],
+        "planned_sessions": [SESSION_ROW], "training_workout_logs": [WORKOUT_ROW],
+        "training_routine_plans": [PLAN_ROW], "training_preferences": [PREFS_ROW], "readiness_scores": [READINESS_ROW],
     })
     session = repo.list_sessions(USER_A, DAY, DAY)[0]
     assert (session.id, session.target_volume, session.intensity_band) == ("s1", 32, "push")

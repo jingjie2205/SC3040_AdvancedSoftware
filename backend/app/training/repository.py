@@ -132,7 +132,7 @@ class SupabaseTrainingRepository:
 
     def get_active_plan(self, user_id: str) -> Optional[TrainingPlan]:
         row = self._first(
-            self.db.table("training_plans").select("*").eq("user_id", user_id).eq("status", "active")
+            self.db.table("training_routine_plans").select("*").eq("user_id", user_id).eq("status", "active")
         )
         return TrainingPlan.model_validate(row) if row else None
 
@@ -147,12 +147,12 @@ class SupabaseTrainingRepository:
         return PlannedSession.model_validate(row) if row else None
 
     def list_workouts(self, user_id: str, start: date, end: date) -> List[WorkoutSession]:
-        query = self.db.table("workout_sessions").select("*").eq("user_id", user_id)
+        query = self.db.table("training_workout_logs").select("*").eq("user_id", user_id)
         return [WorkoutSession.model_validate(r) for r in self._rows(self._range(query, start, end))]
 
     def get_workout_for_session(self, user_id: str, session_id: str) -> Optional[WorkoutSession]:
         row = self._first(
-            self.db.table("workout_sessions")
+            self.db.table("training_workout_logs")
             .select("*")
             .eq("user_id", user_id)
             .eq("planned_session_id", session_id)

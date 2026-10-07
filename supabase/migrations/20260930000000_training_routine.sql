@@ -2,6 +2,12 @@
 --
 -- Depends only on auth.users; it doesn't touch the dashboard tables in schema.sql.
 --
+-- Naming: the plan and logged-workout tables are training_routine_plans and training_workout_logs,
+-- not training_plans / workout_sessions. The live project already has unrelated, empty tables with
+-- those two names from the original ERD (with an `exercises` table hanging off them), and
+-- `create table if not exists` would silently skip them and then fail on the columns that aren't
+-- there. Do not rename these back unless those old tables have been dropped.
+--
 -- Access model: the FastAPI backend uses the service-role key and applies every write through
 -- training_apply_changes (one transaction). Clients only get SELECT on their own rows, so business
 -- rules can't be bypassed by writing to these tables directly.
@@ -22,7 +28,7 @@ create table if not exists public.training_preferences (
     check (7 - cardinality(rest_days) >= days_per_week)
 );
 
-create table if not exists public.training_plans (
+create table if not exists public.training_routine_plans (
     id uuid primary key default gen_random_uuid(),
     user_id uuid not null references auth.users(id) on delete cascade,
     start_date date not null,
@@ -37,13 +43,13 @@ create table if not exists public.training_plans (
 );
 
 -- At most one active plan per user.
-create unique index if not exists training_plans_one_active_per_user
-    on public.training_plans (user_id) where status = 'active';
+create unique index if not exists training_routine_plans_one_active_per_user
+    on public.training_routine_plans (user_id) where status = 'active';
 
 create table if not exists public.planned_sessions (
     id uuid primary key default gen_random_uuid(),
     user_id uuid not null references auth.users(id) on delete cascade,
-    plan_id uuid not null references public.training_plans(id) on delete cascade,
+    plan_id uuid not null references public.training_routine_plans(id) on delete cascade,
     date date not null,
     activity_type text not null check (activity_type in ('run', 'gym', 'cycling', 'bodyweight')),
     target_volume numeric(8, 2) not null check (target_volume >= 0),
@@ -57,7 +63,7 @@ create table if not exists public.planned_sessions (
 
 create index if not exists planned_sessions_user_date on public.planned_sessions (user_id, date);
 
-create table if not exists public.workout_sessions (
+create table if not exists public.training_workout_logs (
     id uuid primary key default gen_random_uuid(),
     user_id uuid not null references auth.users(id) on delete cascade,
     planned_session_id uuid references public.planned_sessions(id) on delete set null,
@@ -72,7 +78,7 @@ create table if not exists public.workout_sessions (
     created_at timestamptz not null default now()
 );
 
-create index if not exists workout_sessions_user_date on public.workout_sessions (user_id, date);
+create index if not exists training_workout_logs_user_date on public.training_workout_logs (user_id, date);
 
 create table if not exists public.readiness_scores (
     user_id uuid not null references auth.users(id) on delete cascade,
@@ -89,19 +95,19 @@ create table if not exists public.readiness_scores (
 
 -- Row level security: read your own rows, nothing else. Writes go through the backend.
 alter table public.training_preferences enable row level security;
-alter table public.training_plans enable row level security;
+alter table public.training_routine_plans enable row level security;
 alter table public.planned_sessions enable row level security;
-alter table public.workout_sessions enable row level security;
+alter table public.training_workout_logs enable row level security;
 alter table public.readiness_scores enable row level security;
 
 create policy "Users can view own training preferences"
     on public.training_preferences for select using (auth.uid() = user_id);
-create policy "Users can view own training plans"
-    on public.training_plans for select using (auth.uid() = user_id);
+create policy "Users can view own training routine plans"
+    on public.training_routine_plans for select using (auth.uid() = user_id);
 create policy "Users can view own planned sessions"
     on public.planned_sessions for select using (auth.uid() = user_id);
-create policy "Users can view own workout sessions"
-    on public.workout_sessions for select using (auth.uid() = user_id);
+create policy "Users can view own workout logs"
+    on public.training_workout_logs for select using (auth.uid() = user_id);
 create policy "Users can view own readiness scores"
     on public.readiness_scores for select using (auth.uid() = user_id);
 
@@ -122,7 +128,7 @@ set search_path = public
 as $$
 begin
     if coalesce((p_changes ->> 'supersede_active_plan')::boolean, false) then
-        update training_plans set status = 'superseded'
+        update training_routine_plans set status = 'superseded'
         where user_id = p_user_id and status = 'active';
     end if;
 
@@ -133,7 +139,7 @@ begin
     end if;
 
     if jsonb_array_length(coalesce(p_changes -> 'upsert_plans', '[]'::jsonb)) > 0 then
-        insert into training_plans
+        insert into training_routine_plans
             (id, user_id, start_date, end_date, weeks, status, baseline_volume, notice,
              last_adaptation, created_at)
         select r.id, p_user_id, r.start_date, r.end_date, r.weeks, r.status, r.baseline_volume,
@@ -145,7 +151,7 @@ begin
             set status = excluded.status,
                 baseline_volume = excluded.baseline_volume,
                 last_adaptation = excluded.last_adaptation
-            where training_plans.user_id = p_user_id;
+            where training_routine_plans.user_id = p_user_id;
     end if;
 
     if jsonb_array_length(coalesce(p_changes -> 'upsert_sessions', '[]'::jsonb)) > 0 then
@@ -168,7 +174,7 @@ begin
     end if;
 
     if jsonb_array_length(coalesce(p_changes -> 'insert_workouts', '[]'::jsonb)) > 0 then
-        insert into workout_sessions
+        insert into training_workout_logs
             (id, user_id, planned_session_id, date, activity_type, actual_volume,
              actual_duration_min, rpe, avg_hr, source, created_at)
         select r.id, p_user_id, r.planned_session_id, r.date, r.activity_type, r.actual_volume,
