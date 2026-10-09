@@ -433,6 +433,108 @@ def test_the_plan_reports_the_goal_it_was_built_for(client, repo):
     assert client.get("/api/v1/training/plan", headers=headers()).json()["goal"] == "lose_weight"
 
 
+# ------------------------------------------------------------------ Home summary and the coach
+
+
+class StubCoach:
+    model = "gemini-2.5-flash"
+
+    def __init__(self, reply="Keep it easy today."):
+        self.reply, self.calls = reply, 0
+
+    def complete(self, system, prompt):
+        self.calls += 1
+        return self.reply
+
+
+def with_coach(app, repo, coach, clock=None):
+    # One service for every request, like the deployed app, so what the coach remembers persists.
+    service = TrainingService(repo, RuleBasedScorer(), coach=coach, clock=clock or (lambda: 1000.0))
+    app.dependency_overrides[get_service] = lambda: service
+    return TestClient(app)
+
+
+def test_the_summary_is_one_call_with_everything_a_home_card_needs(client, repo):
+    onboard(client, repo)
+    generate(client)
+    response = client.get("/api/v1/training/summary", headers=headers())
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"date", "hasPlan", "goal", "readiness", "today", "week", "nextSession"}
+    assert body["hasPlan"] is True and body["today"]["state"] == "to_do"
+    assert body["today"]["session"]["id"] and body["today"]["recommendation"]["explanation"]
+    assert set(body["week"]) == {"start", "end", "plannedSessions", "completedSessions", "missedSessions", "loggedMinutes"}
+    assert body["nextSession"]["date"] > body["date"]
+    assert body["readiness"] == client.get("/api/v1/training/today", headers=headers()).json()["readiness"]
+
+
+def test_the_summary_for_a_new_user_is_empty_but_valid(client):
+    body = client.get("/api/v1/training/summary", headers=headers()).json()
+    assert body["hasPlan"] is False and body["today"]["state"] == "no_plan" and body["nextSession"] is None
+    assert body["week"]["plannedSessions"] == 0 and body["readiness"]["score"] >= 0
+
+
+def test_the_summary_is_private_to_the_signed_in_user(client, repo):
+    onboard(client, repo, USER_A)
+    generate(client, user=USER_A)
+    theirs = client.get("/api/v1/training/summary", headers=headers(USER_B)).json()
+    assert theirs["hasPlan"] is False and theirs["today"]["session"] is None and theirs["week"]["loggedMinutes"] == 0
+
+
+def test_the_summary_and_the_coach_need_a_real_token(client):
+    for call in (lambda h: client.get("/api/v1/training/summary", headers=h),
+                 lambda h: client.post("/api/v1/training/coach", headers=h)):
+        assert call({}).status_code in (401, 403)
+        assert call({"Authorization": "Bearer forged"}).status_code == 401
+
+
+def test_the_coach_answers_with_gemini_text_a_notice_and_no_readiness(app, repo):
+    onboard(TestClient(app), repo)
+    client = with_coach(app, repo, StubCoach("Easy does it today."))
+    generate(client)
+    body = client.post("/api/v1/training/coach", headers=headers()).json()
+    assert set(body) == {"date", "message", "source", "model", "cached", "notice"}
+    assert body["message"] == "Easy does it today." and body["source"] == "gemini" and body["cached"] is False
+    assert "not medical advice" in body["notice"]
+    assert "readiness" not in str(body).lower() and "score" not in str(body).lower()
+
+
+def test_the_same_coach_question_twice_costs_one_call(app, repo):
+    coach = StubCoach()
+    onboard(TestClient(app), repo)
+    client = with_coach(app, repo, coach)
+    generate(client)
+    first = client.post("/api/v1/training/coach", headers=headers()).json()
+    second = client.post("/api/v1/training/coach", headers=headers()).json()
+    assert coach.calls == 1 and second["cached"] is True and second["message"] == first["message"]
+
+
+def test_asking_again_after_things_changed_too_quickly_is_a_429_in_the_usual_error_shape(app, repo):
+    coach = StubCoach()
+    onboard(TestClient(app), repo)
+    client = with_coach(app, repo, coach)
+    generate(client)
+    client.post("/api/v1/training/coach", headers=headers())
+    session = sessions_of(client, TODAY, TODAY)[0]
+    client.post(f"/api/v1/training/sessions/{session['id']}/log", headers=headers(),
+                json={"date": TODAY.isoformat(), "activityType": "run", "actualDurationMin": 30,
+                      "actualVolume": session["targetVolume"]})
+    refused = client.post("/api/v1/training/coach", headers=headers())
+    assert refused.status_code == 429 and refused.json()["detail"]["code"] == "RATE_LIMITED"
+    assert coach.calls == 1
+
+
+def test_without_a_gemini_key_the_coach_still_answers(client, repo):
+    onboard(client, repo)
+    generate(client)
+    body = client.post("/api/v1/training/coach", headers=headers()).json()
+    assert body["source"] == "fallback" and body["model"] is None and body["message"]
+
+
+def test_the_coach_is_a_post_because_it_can_cost_money(client):
+    assert client.get("/api/v1/training/coach", headers=headers()).status_code == 405
+
+
 # ------------------------------------------------------------------ Hard Rule 4: readiness stays private
 
 
@@ -449,8 +551,12 @@ def _models_in(node, seen: set) -> set:
     return seen
 
 
-def test_readiness_appears_in_exactly_two_operations():
-    """Hard Rule 4: scores are never part of any plan, schedule or friend-style response."""
+def test_readiness_appears_in_exactly_three_operations():
+    """
+    Hard Rule 4: scores are never part of any plan, schedule, coach or friend-style response. The three
+    that carry one are the user's own Today view, their own Home summary, and the stateless scoring call.
+    Adding a fourth should be a decision, not an accident, so it has to be added here.
+    """
     application = FastAPI()
     install(application)
     schema = application.openapi()
@@ -472,7 +578,12 @@ def test_readiness_appears_in_exactly_two_operations():
             if {"ReadinessScore", "ReadinessFactor"} & models:
                 exposing.append((method.upper(), path))
 
-    assert sorted(exposing) == [("GET", "/api/v1/training/today"), ("POST", "/api/v1/readiness/score")]
+    assert sorted(exposing) == [
+        ("GET", "/api/v1/training/summary"),
+        ("GET", "/api/v1/training/today"),
+        ("POST", "/api/v1/readiness/score"),
+    ]
+    assert ("POST", "/api/v1/training/coach") not in exposing
 
 
 # ------------------------------------------------------------------ contract with the frontend
@@ -500,6 +611,8 @@ def test_responses_contain_every_field_the_frontend_types_declare(client, repo):
     plan = client.get("/api/v1/training/plan", headers=headers()).json()
     today = client.get("/api/v1/training/today", headers=headers()).json()
     schedule = client.get(f"/api/v1/training/schedule?from={TODAY}&to={TODAY + timedelta(days=6)}", headers=headers()).json()
+    summary = client.get("/api/v1/training/summary", headers=headers()).json()
+    coach = client.post("/api/v1/training/coach", headers=headers()).json()
 
     checks = {
         "TrainingPreferences": client.get("/api/v1/training/preferences", headers=headers()).json(),
@@ -512,6 +625,11 @@ def test_responses_contain_every_field_the_frontend_types_declare(client, repo):
         "SessionRecommendation": today["recommendation"],
         "TodayView": today,
         "Schedule": schedule,
+        "TrainingSummary": summary,
+        "TodaySummary": summary["today"],
+        "WeekProgress": summary["week"],
+        "NextSession": summary["nextSession"],
+        "CoachMessage": coach,
     }
     for name, payload in checks.items():
         missing = _interface_fields(name) - set(payload)

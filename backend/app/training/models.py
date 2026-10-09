@@ -184,6 +184,57 @@ class Schedule(ApiModel):
     workouts: List[WorkoutSession]
 
 
+# A compact view for the Home page: one call instead of four.
+TodayState = Literal["no_plan", "rest_day", "to_do", "done", "missed"]
+
+
+class TodaySummary(ApiModel):
+    state: TodayState
+    # Today's planned session, when there is one, and what readiness makes of it.
+    session: Optional[PlannedSession] = None
+    recommendation: Optional[SessionRecommendation] = None
+    logged: Optional[WorkoutSession] = None
+
+
+class WeekProgress(ApiModel):
+    """Monday to Sunday of the user's current week. Logged minutes leave out Strava rows (Hard Rule 1)."""
+
+    start: date
+    end: date
+    planned_sessions: int
+    completed_sessions: int
+    missed_sessions: int
+    logged_minutes: int
+
+
+class NextSession(ApiModel):
+    date: date
+    activity_type: ActivityType
+    intensity_band: IntensityBand
+    target_duration_min: int
+
+
+class TrainingSummary(ApiModel):
+    date: date
+    has_plan: bool
+    goal: Optional[Goal] = None
+    readiness: ReadinessScore
+    today: TodaySummary
+    week: WeekProgress
+    next_session: Optional[NextSession] = None
+
+
+class CoachMessage(ApiModel):
+    """A short note about today's training. `source` says whether Gemini or the built-in text wrote it."""
+
+    date: date
+    message: str
+    source: Literal["gemini", "fallback"]
+    model: Optional[str] = None
+    cached: bool = False
+    notice: str
+
+
 class RemoveResult(ApiModel):
     redistributed_count: int
 
