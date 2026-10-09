@@ -220,6 +220,11 @@ data, free text from the user, or any id, email or name. Adding to that list mea
 - **Switching it on.** Put `GOOGLE_GENERATIVE_AI_API_KEY` in the backend's `.env`, the same variable the meal
   analysis reads (the frontend's `.env.local` is not enough). The model is `gemini-2.5-flash`, set in
   `config.CoachRules` with its timeout, length and cost limits. Without a key the built-in message is used.
+- **If it keeps answering with the built-in text,** the backend log says why, as `The coach fell back to its
+  built-in message: <kind> <status code> <status word>` (never Google's message text). `ClientError 404 NOT_FOUND`
+  means Google has retired the model for that key (change the model in `config.CoachRules`), `403
+  PERMISSION_DENIED` means the key's Google project has been denied access (use a key from another project),
+  `429 RESOURCE_EXHAUSTED` means out of quota, and a bare `ReadTimeout` means Google never answered in time.
 - **Cost control.** An answer is remembered for an hour per user and set of facts, in this process's memory.
   A different request from the same user within 10 seconds is a 429 (`RATE_LIMITED`).
 - **From the Home page**, with `NEXT_PUBLIC_TRAINING_API=http` and `NEXT_PUBLIC_BACKEND_URL` set:

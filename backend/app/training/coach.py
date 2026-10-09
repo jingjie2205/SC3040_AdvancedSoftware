@@ -39,6 +39,24 @@ class CoachUnavailable(Exception):
     """The vendor didn't give a usable answer. The service falls back to the built-in message."""
 
 
+_STATUS_WORD = re.compile(r"[A-Z_]{3,40}")
+
+
+def why(error: Exception) -> str:
+    """
+    What to log when Gemini can't be used: the kind of failure and, when Google answered, its status code and
+    status word (`ClientError 404 NOT_FOUND` for a retired model, `403 PERMISSION_DENIED` for a denied project,
+    `429 RESOURCE_EXHAUSTED` for quota). Never Google's message text, which can echo the request.
+    """
+    parts = [type(error).__name__]
+    code, status = getattr(error, "code", None), getattr(error, "status", None)
+    if isinstance(code, int) and not isinstance(code, bool):
+        parts.append(str(code))
+    if isinstance(status, str) and _STATUS_WORD.fullmatch(status):
+        parts.append(status)
+    return " ".join(parts)
+
+
 class CoachClient(Protocol):
     model: str
 
@@ -184,7 +202,7 @@ class GeminiCoachClient:
             )
             text = response.text
         except Exception as error:  # noqa: BLE001 - the SDK raises several unrelated types; all mean "fall back"
-            raise CoachUnavailable(type(error).__name__) from error
+            raise CoachUnavailable(why(error)) from error
         if not text or not text.strip():
             raise CoachUnavailable("empty reply")
         return text

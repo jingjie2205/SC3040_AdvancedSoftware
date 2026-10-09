@@ -23,6 +23,7 @@ from app.training.coach import (
     clean,
     fallback_message,
     load_coach,
+    why,
 )
 from app.training.config import COACH_RULES, PLAN_NOTICE, CoachRules
 from app.training.errors import TrainingError
@@ -409,12 +410,36 @@ def test_every_way_gemini_can_fail_becomes_a_clean_unavailable(response):
         sdk_client(lambda request: response).complete("system", "prompt")
 
 
+@pytest.mark.parametrize("code,status,expected", [
+    (404, "NOT_FOUND", "ClientError 404 NOT_FOUND"),  # a model Google has retired for this key
+    (403, "PERMISSION_DENIED", "ClientError 403 PERMISSION_DENIED"),  # a project that has been denied access
+    (429, "RESOURCE_EXHAUSTED", "ClientError 429 RESOURCE_EXHAUSTED"),  # out of quota
+    (503, "UNAVAILABLE", "ServerError 503 UNAVAILABLE"),
+])
+def test_the_log_says_which_status_google_answered_with_and_never_its_message(code, status, expected):
+    response = httpx.Response(code, json={"error": {"code": code, "message": "ECHOED-PROMPT-TEXT", "status": status}})
+    with pytest.raises(CoachUnavailable) as failed:
+        sdk_client(lambda request: response).complete("system", "prompt")
+    assert str(failed.value) == expected
+    assert "ECHOED" not in str(failed.value)  # Google's message can repeat the request, so it never reaches the log
+
+
+def test_why_only_uses_a_plain_status_code_and_status_word():
+    class Odd(Exception):
+        code = True  # a bool is not a status code
+        status = "free text that could hold anything, even the user's words"
+
+    assert why(Odd()) == "Odd"
+    assert why(ValueError("secret")) == "ValueError"
+
+
 def test_a_slow_gemini_becomes_a_clean_unavailable():
     def handler(request):
         raise httpx.ReadTimeout("too slow", request=request)
 
-    with pytest.raises(CoachUnavailable):
+    with pytest.raises(CoachUnavailable) as failed:
         sdk_client(handler).complete("system", "prompt")
+    assert str(failed.value) == "ReadTimeout"  # no status to report: Google never answered
 
 
 def test_the_service_falls_back_when_the_real_client_meets_a_failing_server():
