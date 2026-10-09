@@ -273,7 +273,7 @@ def daily_log(db: Client, user_id: str, day: date, offset_minutes: int) -> dict:
     }
 
 
-def batch_daily_log(
+def fetch_batch_calories(
     db: Client, user_id: str, start_date: date, end_date: date, offset_minutes: int
 ) -> list[dict]:
     start_time = datetime.combine(
@@ -287,11 +287,10 @@ def batch_daily_log(
 
     all_meals = (
         db.table("meal_plans")
-        .select("*,food_items(*)")
+        .select("timestamp,total_calories")
         .eq("user_id", user_id)
         .gte("timestamp", start_iso)
         .lt("timestamp", end_iso)
-        .order("timestamp", desc=True)
         .execute()
         .data
     )
@@ -309,31 +308,6 @@ def batch_daily_log(
         if exc.code not in {"42P01", "PGRST205"}:
             raise
         all_activities = []
-
-    try:
-        profiles = (
-            db.table("users")
-            .select("age,weight,height,biological_sex")
-            .eq("user_id", user_id)
-            .limit(1)
-            .execute()
-            .data
-        )
-    except APIError as exc:
-        if exc.code not in {"42P01", "PGRST205"}:
-            raise
-        profiles = []
-    profile = profiles[0] if profiles else {}
-    bmr = None
-    if all(
-        profile.get(key) and profile[key] > 0 for key in ("age", "weight", "height")
-    ) and profile.get("biological_sex") in {"MALE", "FEMALE"}:
-        bmr = round(
-            10 * profile["weight"]
-            + 6.25 * profile["height"]
-            - 5 * profile["age"]
-            + (5 if profile["biological_sex"] == "MALE" else -161)
-        )
 
     meals_by_day = {}
     for meal in all_meals:
@@ -362,14 +336,13 @@ def batch_daily_log(
     while current_date <= end_date:
         day_meals = meals_by_day.get(current_date, [])
         day_activities = activities_by_day.get(current_date, [])
-        records = [record(row) for row in day_meals]
-        total = {
-            key: round(sum(meal[key] for meal in records), 1)
-            if all(meal[key] is not None for meal in records)
+        total_calories = (
+            round(sum(meal["total_calories"] for meal in day_meals), 1)
+            if day_meals
+            and all(meal.get("total_calories") is not None for meal in day_meals)
             else None
-            for key in ("total_calories", "protein_g", "carbs_g", "fat_g")
-        }
-        burn = (
+        )
+        active_calories = (
             round(sum(row["calories"] for row in day_activities), 1)
             if day_activities
             and all(row.get("calories") is not None for row in day_activities)
@@ -378,15 +351,8 @@ def batch_daily_log(
         logs.append(
             {
                 "date": current_date.isoformat(),
-                "meals": records,
-                **total,
-                "bmr": bmr,
-                "active_calories": burn,
-                "net_energy": round(total["total_calories"] - bmr - burn, 1)
-                if bmr is not None
-                and burn is not None
-                and total["total_calories"] is not None
-                else None,
+                "total_calories": total_calories,
+                "active_calories": active_calories,
             }
         )
         current_date += timedelta(days=1)

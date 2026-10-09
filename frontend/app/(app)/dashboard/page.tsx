@@ -34,7 +34,7 @@ import {
   CartesianGrid,
 } from "recharts";
 
-import { fetchBatchDailyLog, DailyLog } from "@/lib/nutrition";
+import { fetchBatchCalories, BatchCalories } from "@/lib/nutrition";
 import Calendar from "./components/calendar";
 
 /* ------------------------------------------------------------------ */
@@ -149,7 +149,7 @@ export default function HomePage() {
       startDate.setDate(today.getDate() - 34);
       const startDateString = startDate.toISOString().split("T")[0];
 
-      const results = await fetchBatchDailyLog(startDateString, endDate);
+      const results = await fetchBatchCalories(startDateString, endDate);
       const logsByDate = new Map(results.map((log) => [log.date, log]));
 
       // Process daily data
@@ -160,7 +160,7 @@ export default function HomePage() {
         const dateString = day.toISOString().split("T")[0];
         const log = logsByDate.get(dateString);
         const intake = log?.total_calories || 0;
-        const goal = log?.bmr || 2300;
+        const goal = 2300; // Default goal
         const label = `${day.getMonth() + 1}/${day.getDate()}`;
         dailyData.push({ label, intake, goal });
       }
@@ -175,7 +175,6 @@ export default function HomePage() {
         weekEnd.setDate(weekStart.getDate() + 6);
 
         let totalCalories = 0;
-        let totalBmr = 0;
         let daysWithData = 0;
 
         for (let j = 0; j < 7; j++) {
@@ -185,7 +184,6 @@ export default function HomePage() {
           const log = logsByDate.get(dateString);
           if (log && log.total_calories) {
             totalCalories += log.total_calories;
-            totalBmr += log.bmr || 2300;
             daysWithData++;
           }
         }
@@ -193,8 +191,7 @@ export default function HomePage() {
         const averageIntake =
           daysWithData > 0 ? Math.round(totalCalories / daysWithData) : 0;
         const intake = totalCalories;
-        const goal =
-          daysWithData > 0 ? Math.round(totalBmr / daysWithData) : 2300;
+        const goal = 2300; // Default goal
         const label = `${weekStart.getMonth() + 1}/${weekStart.getDate()} - ${
           weekEnd.getMonth() + 1
         }/${weekEnd.getDate()}`;
@@ -275,15 +272,15 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 px-4 py-8 sm:px-8">
-      <div className="mx-auto max-w-6xl space-y-8">
+    <div className="min-h-screen bg-slate-950">
+      <div className="mx-auto max-w-6xl space-y-8 px-4 sm:px-8">
         {/* Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
               Today
             </h1>
-            <p className="mt-1 text-sm text-slate-400">
+            <p className="text-sm text-slate-400">
               Your health, training and nutrition, all in one place.
             </p>
           </div>

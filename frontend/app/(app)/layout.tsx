@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -13,13 +14,11 @@ import {
   Settings,
 } from "lucide-react";
 
-// Mock data for now
-const mockUser: { name: string; email: string; image: string | null } = {
-  name: "John Doe",
-  email: "john.doe@example.com",
-  image: "https://i.pravatar.cc/200?img=13", // set to null to test the default icon, using pravatar for mock avatars. /200 = resolution?img=number
-  //image: null, // set to null to test the default icon
-};
+interface UserData {
+  name: string;
+  email: string;
+  image: string | null;
+}
 
 export default function DashboardLayout({
   children,
@@ -27,7 +26,24 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const user = mockUser;
+  const [user, setUser] = useState<UserData | null>(null);
+
+  useEffect(() => {
+    async function fetchUserData() {
+      try {
+        const response = await fetch("/api/user");
+        if (!response.ok) {
+          throw new Error("Failed to fetch user data");
+        }
+        const userData = await response.json();
+        setUser(userData);
+      } catch (error) {
+        console.error("Error fetching user data:", error);
+      }
+    }
+
+    fetchUserData();
+  }, []);
 
   const navItems = [
     { name: "Home", href: "/dashboard", icon: Home },
@@ -80,25 +96,12 @@ export default function DashboardLayout({
 
           {/* Right: welcome message + user icon */}
           <div className="flex items-center gap-3">
-            <p className="hidden sm:block text-sm text-slate-200">
-              Welcome back,{" "}
-              <span className="font-semibold text-white">{user.name}</span>
-            </p>
-            <div
-              className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-slate-700 bg-slate-800 text-emerald-400"
-              title={user.email}
-            >
-              {user.image ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={user.image}
-                  alt={user.name}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <User className="h-4 w-4" />
-              )}
-            </div>
+            {user && (
+              <p className="hidden sm:block text-sm text-slate-200">
+                Welcome back,{" "}
+                <span className="font-semibold text-white">{user.name}</span>
+              </p>
+            )}
           </div>
         </div>
       </header>
