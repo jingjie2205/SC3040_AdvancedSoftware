@@ -34,6 +34,7 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     userId: str
     createdAt: datetime
+    isStravaConnected: bool = False
 
     class Config:
         from_attributes = True

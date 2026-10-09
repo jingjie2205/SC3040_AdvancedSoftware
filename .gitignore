@@ -38,3 +38,6 @@ yarn-error.log*
 *.pem
 .vscode/
 .idea/
+
+# Local nutrition demo database
+backend/.local/

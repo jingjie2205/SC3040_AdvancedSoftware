@@ -111,6 +111,8 @@ Endurance athletes walk a fine line between fitness gains and overtraining injur
 
 ## Key Features
 
+- **Meal analysis and food logging:** Upload a meal photo, review ingredients and portions, and save daily nutrition totals at `/dashboard/nutrition`. See [Meal analysis setup](docs/meal-analysis-setup.md) for API keys, the database migration, and integration requirements.
+
 - **Decoupled Two-Tier Design:** Clear separation of concerns between UI presentation and heavy scientific/AI computing.
 - **NumPy Vectorization:** Replaces iterative telemetry loops with vectorized array calculations, dramatically accelerating TRIMP scoring.
 - **Asynchronous Task Queue:** Built-in Redis queue and consumer pipeline ensures webhook ingestion satisfies Strava's strict 2-second timeout.

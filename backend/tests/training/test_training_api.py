@@ -1,0 +1,463 @@
+import re
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Dict, Iterator, Optional
+
+import pytest
+from fastapi import FastAPI
+from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
+
+from app.commons.auth import deps
+from app.commons.auth.deps import get_current_user_id
+from app.training.clock import get_client_date
+from app.training import router as router_module
+from app.training.ml.scorer import ModelScorer, load_scorer
+from app.training.readiness import RuleBasedScorer
+from app.training.router import TRAINING_PREFIX, get_service, install, readiness_router, router
+from app.training.service import TrainingService
+from training_fakes import TODAY, USER_A, USER_B, FakeTrainingRepository, seed_history
+
+PREFS = {
+    "daysPerWeek": 4,
+    "sessionDurationMin": 45,
+    "activityTypes": ["run", "gym", "cycling"],
+    "restDays": ["tue", "thu", "sun"],
+}
+
+
+class FakeSupabaseAuth:
+    """
+    Stands in for Supabase Auth behind the shared `get_current_user_id`, so these tests run the real
+    dependency end to end. Like the real client, it raises for a token it doesn't recognise.
+    """
+
+    def __init__(self, sessions: Dict[str, Optional[str]]) -> None:
+        self.sessions = sessions
+
+    def get_user(self, token: str):
+        if token not in self.sessions:
+            raise RuntimeError("invalid JWT")
+        user_id = self.sessions[token]
+        return SimpleNamespace(user=SimpleNamespace(id=user_id) if user_id else None)
+
+
+def token_for(user: str = USER_A) -> str:
+    return f"access-token-for-{user}"
+
+
+def headers(user: str = USER_A) -> dict:
+    return {"Authorization": f"Bearer {token_for(user)}"}
+
+
+@pytest.fixture
+def supabase_auth(monkeypatch) -> FakeSupabaseAuth:
+    fake = FakeSupabaseAuth({token_for(USER_A): USER_A, token_for(USER_B): USER_B})
+    monkeypatch.setattr(deps, "get_supabase_admin", lambda: SimpleNamespace(auth=fake))
+    return fake
+
+
+@pytest.fixture
+def repo() -> FakeTrainingRepository:
+    return FakeTrainingRepository()
+
+
+@pytest.fixture
+def app(repo, supabase_auth) -> FastAPI:
+    application = FastAPI()
+    install(application)
+    service = TrainingService(repo, RuleBasedScorer())
+    application.dependency_overrides[get_service] = lambda: service
+    application.dependency_overrides[get_client_date] = lambda: TODAY
+    return application
+
+
+@pytest.fixture
+def client(app) -> TestClient:
+    return TestClient(app)
+
+
+def onboard(client, repo, user: str = USER_A) -> None:
+    assert client.put("/api/v1/training/preferences", json=PREFS, headers=headers(user)).status_code == 200
+    seed_history(repo, user, TODAY - timedelta(days=TODAY.weekday()))
+
+
+def generate(client, weeks: int = 8, user: str = USER_A, confirm: bool = False):
+    return client.post("/api/v1/training/plan", json={"weeks": weeks, "confirmReplace": confirm}, headers=headers(user))
+
+
+# ------------------------------------------------------------------ authentication
+# Identity comes from the team's shared `get_current_user_id`, where Supabase verifies the token. So
+# these tests cover that every route is behind it and that only its answer decides whose data is served.
+
+
+def _dependency_calls(dependant) -> Iterator:
+    for sub in dependant.dependencies:
+        yield sub.call
+        yield from _dependency_calls(sub)
+
+
+def test_every_training_and_readiness_route_sits_behind_the_shared_auth_dependency():
+    routes = [route for mounted in (router, readiness_router) for route in mounted.routes if isinstance(route, APIRoute)]
+    assert len(routes) >= 10, "the route filter matched almost nothing"
+    unguarded = [route.path for route in routes if get_current_user_id not in _dependency_calls(route.dependant)]
+    assert unguarded == []
+
+
+@pytest.mark.parametrize("path", ["/preferences", "/plan", "/today", "/schedule?from=2026-09-28&to=2026-10-04"])
+def test_every_route_needs_a_token(client, path):
+    # FastAPI's HTTPBearer answers 403 on older releases and 401 on newer ones when the header is absent.
+    assert client.get(f"{TRAINING_PREFIX}{path}").status_code in (401, 403)
+
+
+@pytest.mark.parametrize("bad", ["Basic abc", "Bearer", ""])
+def test_a_malformed_authorization_header_is_rejected(client, bad):
+    response = client.get(f"{TRAINING_PREFIX}/preferences", headers={"Authorization": bad})
+    assert response.status_code in (401, 403)
+
+
+def test_a_token_supabase_does_not_recognise_is_rejected_and_nothing_is_written(client, repo):
+    """Forged, expired and wrong-audience tokens all look like this: Supabase refuses to resolve them."""
+    response = client.post(
+        f"{TRAINING_PREFIX}/plan",
+        json={"weeks": 4, "confirmReplace": False},
+        headers={"Authorization": "Bearer forged-or-expired"},
+    )
+    assert response.status_code == 401
+    assert repo.plans == {}
+
+
+def test_a_token_that_resolves_to_no_user_is_rejected(client, supabase_auth):
+    supabase_auth.sessions["orphan"] = None
+    response = client.get(f"{TRAINING_PREFIX}/preferences", headers={"Authorization": "Bearer orphan"})
+    assert response.status_code == 401
+
+
+def test_the_user_comes_only_from_the_token_never_from_the_request(client, repo):
+    onboard(client, repo)
+    response = client.post(
+        "/api/v1/training/plan?userId=" + USER_B,
+        json={"weeks": 4, "confirmReplace": False, "userId": USER_B, "user_id": USER_B},
+        headers=headers(USER_A),
+    )
+    assert response.status_code == 200
+    assert {owner for owner, _ in repo.plans.values()} == {USER_A}
+    assert client.get("/api/v1/training/plan", headers=headers(USER_B)).json() is None
+
+
+def test_no_route_takes_a_user_id():
+    application = FastAPI()
+    install(application)
+    schema = application.openapi()
+    text = str(schema).lower()
+    for name in ("userid", "user_id"):
+        assert name not in text
+
+
+# ------------------------------------------------------------------ client date
+
+
+def test_client_date_defaults_to_utc_today_and_rejects_dates_far_from_it():
+    today = datetime.now(timezone.utc).date()
+    assert get_client_date(None) == today
+    assert get_client_date((today + timedelta(days=1)).isoformat()) == today + timedelta(days=1)
+    for bad in ((today + timedelta(days=3)).isoformat(), "not-a-date"):
+        with pytest.raises(Exception) as raised:
+            get_client_date(bad)
+        assert raised.value.status_code == 400
+
+
+# ------------------------------------------------------------------ preferences and validation shape
+
+
+def test_preferences_round_trip_in_camel_case(client):
+    assert client.get("/api/v1/training/preferences", headers=headers()).json() is None
+    saved = client.put("/api/v1/training/preferences", json=PREFS, headers=headers()).json()
+    assert {k: saved[k] for k in PREFS} == PREFS and "updatedAt" in saved
+    assert client.get("/api/v1/training/preferences", headers=headers()).json() == saved
+
+
+def test_validation_errors_use_the_same_shape_as_every_other_error(client):
+    response = client.put(
+        "/api/v1/training/preferences",
+        json={"daysPerWeek": 9, "sessionDurationMin": 5, "activityTypes": [], "restDays": ["mon", "tue", "wed"]},
+        headers=headers(),
+    )
+    detail = response.json()["detail"]
+    assert response.status_code == 422 and detail["code"] == "VALIDATION"
+    assert {"daysPerWeek", "sessionDurationMin", "activityTypes"} <= set(detail["fieldErrors"])
+
+
+def test_not_enough_free_days_is_reported_against_rest_days(client):
+    body = {**PREFS, "daysPerWeek": 7, "restDays": ["sun"]}
+    detail = client.put("/api/v1/training/preferences", json=body, headers=headers()).json()["detail"]
+    assert "restDays" in detail["fieldErrors"] and "free" in detail["fieldErrors"]["restDays"]
+
+
+def test_other_routes_keep_the_default_validation_response(app):
+    @app.get("/elsewhere")
+    def elsewhere(n: int):
+        return n
+
+    body = TestClient(app).get("/elsewhere?n=abc").json()
+    assert isinstance(body["detail"], list)
+
+
+# ------------------------------------------------------------------ plan flow
+
+
+def test_generating_without_preferences_explains_why(client):
+    response = generate(client)
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "NO_PREFERENCES"
+
+
+def test_generate_then_get_then_replace_needs_confirmation(client, repo):
+    onboard(client, repo)
+    created = generate(client)
+    assert created.status_code == 200
+    plan = created.json()
+    assert plan["weeks"] == 8 and "not medical advice" in plan["notice"] and plan["status"] == "active"
+    assert client.get("/api/v1/training/plan", headers=headers()).json()["id"] == plan["id"]
+
+    refused = generate(client, weeks=6)
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "PLAN_EXISTS"
+    assert generate(client, weeks=6, confirm=True).status_code == 200
+
+
+def test_plan_length_is_validated(client, repo):
+    onboard(client, repo)
+    detail = generate(client, weeks=99).json()["detail"]
+    assert detail["code"] == "VALIDATION" and "weeks" in detail["fieldErrors"]
+
+
+def test_recalculate_and_acknowledge(client, repo):
+    onboard(client, repo)
+    generate(client)
+    adapted = client.post("/api/v1/training/plan/recalculate", headers=headers()).json()
+    assert adapted["lastAdaptation"]["trigger"] == "manual" and adapted["lastAdaptation"]["acknowledged"] is False
+    assert client.post("/api/v1/training/plan/adaptation/acknowledge", headers=headers()).status_code == 204
+    assert client.get("/api/v1/training/plan", headers=headers()).json()["lastAdaptation"]["acknowledged"] is True
+
+
+# ------------------------------------------------------------------ sessions
+
+
+def sessions_of(client, start: date, end: date, user: str = USER_A) -> list:
+    response = client.get(f"/api/v1/training/schedule?from={start}&to={end}", headers=headers(user))
+    assert response.status_code == 200
+    return response.json()["sessions"]
+
+
+def test_schedule_move_refusal_carries_a_suggested_day_and_success_marks_it_moved(client, repo):
+    onboard(client, repo)
+    generate(client)
+    saturday = sessions_of(client, date(2026, 10, 10), date(2026, 10, 10))[0]
+
+    refused = client.patch(f"/api/v1/training/sessions/{saturday['id']}", json={"date": "2026-10-11"}, headers=headers())
+    detail = refused.json()["detail"]
+    assert refused.status_code == 409
+    assert detail["code"] == "CONSECUTIVE_HIGH_INTENSITY" and detail["suggestedDate"] == "2026-10-08"
+
+    moved = client.patch(f"/api/v1/training/sessions/{saturday['id']}", json={"date": detail["suggestedDate"]}, headers=headers())
+    assert moved.status_code == 200 and moved.json()["status"] == "moved"
+
+
+def test_remove_respond_and_log(client, repo):
+    onboard(client, repo)
+    generate(client)
+    today_session = sessions_of(client, TODAY, TODAY)[0]
+
+    accepted = client.post(f"/api/v1/training/sessions/{today_session['id']}/respond", json={"action": "accept"}, headers=headers())
+    assert accepted.json()["status"] == "accepted"
+
+    bad_swap = client.post(f"/api/v1/training/sessions/{today_session['id']}/respond", json={"action": "swap"}, headers=headers())
+    assert bad_swap.status_code == 422 and bad_swap.json()["detail"]["code"] == "VALIDATION"
+
+    log = {"date": TODAY.isoformat(), "activityType": "run", "actualDurationMin": 40, "actualVolume": today_session["targetVolume"], "rpe": 6, "avgHr": 140}
+    logged = client.post(f"/api/v1/training/sessions/{today_session['id']}/log", json=log, headers=headers())
+    assert logged.status_code == 200
+    assert logged.json()["session"]["status"] == "completed" and logged.json()["workout"]["plannedSessionId"] == today_session["id"]
+
+    friday = sessions_of(client, TODAY + timedelta(days=2), TODAY + timedelta(days=2))[0]
+    removed = client.delete(f"/api/v1/training/sessions/{friday['id']}", headers=headers())
+    assert removed.status_code == 200 and removed.json()["redistributedCount"] >= 1
+
+
+def test_ad_hoc_logging_and_field_errors(client, repo):
+    onboard(client, repo)
+    ok = client.post("/api/v1/training/sessions", json={"date": TODAY.isoformat(), "activityType": "gym", "actualDurationMin": 30, "actualVolume": 20}, headers=headers())
+    assert ok.status_code == 200 and ok.json()["session"] is None
+
+    bad = client.post("/api/v1/training/sessions", json={"date": TODAY.isoformat(), "activityType": "gym", "actualDurationMin": 0, "actualVolume": -1, "rpe": 11}, headers=headers())
+    fields = bad.json()["detail"]["fieldErrors"]
+    assert bad.status_code == 422 and {"actualDurationMin", "actualVolume", "rpe"} <= set(fields)
+
+    future = client.post("/api/v1/training/sessions", json={"date": (TODAY + timedelta(days=1)).isoformat(), "activityType": "gym", "actualDurationMin": 30, "actualVolume": 20}, headers=headers())
+    assert future.json()["detail"]["fieldErrors"]["date"]
+
+
+def test_a_malformed_session_id_is_a_validation_error_not_a_server_error(client):
+    assert client.delete("/api/v1/training/sessions/not-a-uuid", headers=headers()).status_code == 422
+
+
+def test_users_cannot_touch_each_others_sessions_over_http(client, repo):
+    onboard(client, repo, USER_A)
+    generate(client)
+    theirs = sessions_of(client, TODAY, TODAY)[0]
+    for call in (
+        lambda: client.patch(f"/api/v1/training/sessions/{theirs['id']}", json={"date": "2026-10-01"}, headers=headers(USER_B)),
+        lambda: client.delete(f"/api/v1/training/sessions/{theirs['id']}", headers=headers(USER_B)),
+        lambda: client.post(f"/api/v1/training/sessions/{theirs['id']}/respond", json={"action": "skip"}, headers=headers(USER_B)),
+    ):
+        response = call()
+        assert response.status_code == 404 and response.json()["detail"]["code"] == "NOT_FOUND"
+    assert sessions_of(client, TODAY, TODAY, USER_B) == []
+
+
+# ------------------------------------------------------------------ today and readiness
+
+
+def test_today_returns_readiness_and_the_reconciled_workout(client, repo):
+    onboard(client, repo)
+    generate(client)
+    body = client.get("/api/v1/training/today", headers=headers()).json()
+    assert body["date"] == TODAY.isoformat()
+    assert 0 <= body["readiness"]["score"] <= 100 and body["readiness"]["factors"]
+    assert body["planned"]["id"] and body["recommendation"]["explanation"]
+
+
+def test_scoring_endpoint_is_stateless_and_validated(client, repo):
+    features = {"acwr": 1.6, "sleepHours": 5.5, "checkinLoadRating": 4}
+    first = client.post("/api/v1/readiness/score", json=features, headers=headers())
+    assert first.status_code == 200
+    assert first.json() == client.post("/api/v1/readiness/score", json=features, headers=headers()).json()
+    assert repo.readiness == {}  # nothing stored
+
+    assert client.post("/api/v1/readiness/score", json={"sleepHours": 99}, headers=headers()).status_code == 422
+    assert client.post("/api/v1/readiness/score", json=features).status_code == 401
+
+
+# ------------------------------------------------------------------ Hard Rule 4: readiness stays private
+
+
+def _models_in(node, seen: set) -> set:
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if ref:
+            seen.add(ref.rsplit("/", 1)[-1])
+        for value in node.values():
+            _models_in(value, seen)
+    elif isinstance(node, list):
+        for value in node:
+            _models_in(value, seen)
+    return seen
+
+
+def test_readiness_appears_in_exactly_two_operations():
+    """Hard Rule 4: scores are never part of any plan, schedule or friend-style response."""
+    application = FastAPI()
+    install(application)
+    schema = application.openapi()
+    components = schema["components"]["schemas"]
+
+    def reachable(name: str, acc: set) -> set:
+        if name in acc:
+            return acc
+        acc.add(name)
+        for child in _models_in(components[name], set()):
+            reachable(child, acc)
+        return acc
+
+    exposing = []
+    for path, operations in schema["paths"].items():
+        for method, operation in operations.items():
+            direct = _models_in(operation.get("responses", {}), set())
+            models = set().union(*[reachable(m, set()) for m in direct]) if direct else set()
+            if {"ReadinessScore", "ReadinessFactor"} & models:
+                exposing.append((method.upper(), path))
+
+    assert sorted(exposing) == [("GET", "/api/v1/training/today"), ("POST", "/api/v1/readiness/score")]
+
+
+# ------------------------------------------------------------------ contract with the frontend
+
+
+TYPES_FILE = Path(__file__).resolve().parents[3] / "frontend" / "lib" / "training" / "types.ts"
+
+
+def _interface_fields(name: str) -> set:
+    source = TYPES_FILE.read_text(encoding="utf-8")
+    body = re.search(rf"export interface {name} \{{(.*?)\n\}}", source, re.S).group(1)
+    return set(re.findall(r"^\s+(\w+)\??:", body, re.M))
+
+
+@pytest.mark.skipif(not TYPES_FILE.exists(), reason="frontend types not present")
+def test_responses_contain_every_field_the_frontend_types_declare(client, repo):
+    """The frontend reads these fields; a rename or omission here would break it silently."""
+    onboard(client, repo)
+    generate(client)
+    saturday = sessions_of(client, TODAY, TODAY + timedelta(days=3))[0]
+    client.post(f"/api/v1/training/sessions/{saturday['id']}/log", headers=headers(),
+                json={"date": TODAY.isoformat(), "activityType": "run", "actualDurationMin": 30, "actualVolume": 25, "rpe": 5, "avgHr": 140})
+    client.post("/api/v1/training/plan/recalculate", headers=headers())
+
+    plan = client.get("/api/v1/training/plan", headers=headers()).json()
+    today = client.get("/api/v1/training/today", headers=headers()).json()
+    schedule = client.get(f"/api/v1/training/schedule?from={TODAY}&to={TODAY + timedelta(days=6)}", headers=headers()).json()
+
+    checks = {
+        "TrainingPreferences": client.get("/api/v1/training/preferences", headers=headers()).json(),
+        "TrainingPlan": plan,
+        "PlanAdaptation": plan["lastAdaptation"],
+        "PlannedSession": schedule["sessions"][0],
+        "WorkoutSession": schedule["workouts"][0],
+        "ReadinessScore": today["readiness"],
+        "ReadinessFactor": today["readiness"]["factors"][0],
+        "SessionRecommendation": today["recommendation"],
+        "TodayView": today,
+        "Schedule": schedule,
+    }
+    for name, payload in checks.items():
+        missing = _interface_fields(name) - set(payload)
+        assert not missing, f"{name} is missing {sorted(missing)}"
+
+
+# ------------------------------------------------------------------ readiness model
+
+
+def test_the_model_endpoint_needs_a_token_and_holds_no_user_data(client):
+    assert client.get("/api/v1/readiness/model").status_code in (401, 403)
+    response = client.get("/api/v1/readiness/model", headers=headers())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "rules" and body["version"] == RuleBasedScorer.version
+    assert USER_A not in response.text
+
+
+def test_scoring_over_http_works_with_the_trained_model(app, repo):
+    app.dependency_overrides[get_service] = lambda: TrainingService(repo, load_scorer())
+    client = TestClient(app)
+
+    info = client.get("/api/v1/readiness/model", headers=headers()).json()
+    assert info["kind"] == "model" and "synthetic" in info["trainedOn"] and info["fallbackReason"] is None
+
+    response = client.post(
+        "/api/v1/readiness/score",
+        json={"acwr": 1.8, "sleepHours": 4, "checkinLoadRating": 5},
+        headers=headers(),
+    )
+    body = response.json()
+    assert response.status_code == 200
+    assert body["classification"] == "deload" and 0 <= body["score"] <= 100
+    assert body["factors"] and {"key", "label", "impact", "detail"} <= set(body["factors"][0])
+
+
+def test_the_app_as_deployed_builds_its_service_on_the_trained_model(monkeypatch):
+    monkeypatch.setattr(router_module, "create_repository", lambda: FakeTrainingRepository())
+    router_module._default_service.cache_clear()
+    try:
+        assert isinstance(router_module._default_service().scorer, ModelScorer)
+    finally:
+        router_module._default_service.cache_clear()

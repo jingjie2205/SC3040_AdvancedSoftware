@@ -153,6 +153,7 @@ async def process_activity_pipeline(activity_id: int, athlete_id: Optional[int] 
                     "total_elevation_gain": activity_meta.total_elevation_gain,
                     "average_heartrate": activity_meta.average_heartrate,
                     "max_heartrate": activity_meta.max_heartrate,
+                    "calories": activity_meta.calories,
                     "trimp_score": trimp_score,
                     "streams_summary": hr_zones.model_dump(),
                     "raw_streams": {"time": time_stream, "heartrate": hr_stream} if time_stream else None,
