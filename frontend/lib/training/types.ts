@@ -130,3 +130,58 @@ export interface Schedule {
   sessions: PlannedSession[];
   workouts: WorkoutSession[];
 }
+
+export type TodayState = "no_plan" | "rest_day" | "to_do" | "done" | "missed";
+
+export interface TodaySummary {
+  state: TodayState;
+  /** Today's planned session, when there is one. */
+  session: PlannedSession | null;
+  /** What readiness makes of it. Only set while the session is still to do. */
+  recommendation: SessionRecommendation | null;
+  logged: WorkoutSession | null;
+}
+
+export interface WeekProgress {
+  /** Monday and Sunday of the user's current week, as "YYYY-MM-DD". */
+  start: string;
+  end: string;
+  plannedSessions: number;
+  completedSessions: number;
+  missedSessions: number;
+  /** Minutes logged this week. Strava rows are left out. */
+  loggedMinutes: number;
+}
+
+export interface NextSession {
+  date: string;
+  activityType: ActivityType;
+  intensityBand: IntensityBand;
+  targetDurationMin: number;
+}
+
+/** Everything a Home card needs, from GET /api/v1/training/summary. Only the signed-in user's own. */
+export interface TrainingSummary {
+  date: string;
+  hasPlan: boolean;
+  goal: Goal | null;
+  readiness: ReadinessScore;
+  today: TodaySummary;
+  week: WeekProgress;
+  nextSession: NextSession | null;
+}
+
+/**
+ * A short note about today's training, from POST /api/v1/training/coach. `source` says whether Gemini
+ * or the built-in text wrote it. Gemini is never given readiness, check-in answers or Strava data.
+ */
+export interface CoachMessage {
+  date: string;
+  message: string;
+  source: "gemini" | "fallback";
+  model: string | null;
+  /** True when this is an earlier answer to the same question, served from memory. */
+  cached: boolean;
+  /** The not-medical-advice notice to show with it. */
+  notice: string;
+}

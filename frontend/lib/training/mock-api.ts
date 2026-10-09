@@ -25,16 +25,20 @@ import {
 import type { LogWorkoutInput, TrainingPreferencesInput } from "./schemas";
 import type { ApiError, ApiResult, LogResult, TrainingApi } from "./api";
 import type {
+  CoachMessage,
   Goal,
   IntensityBand,
   ModelInfo,
+  NextSession,
   PlannedSession,
   ReadinessFactor,
   ReadinessScore,
   SessionRecommendation,
+  TodayState,
   TodayView,
   TrainingPlan,
   TrainingPreferences,
+  TrainingSummary,
   WorkoutSession,
 } from "./types";
 
@@ -355,6 +359,77 @@ const MOCK_MODEL: ModelInfo = {
   fallbackReason: null,
 };
 
+/** The plan side of "how is today going", with no readiness in it (the coach is built from this alone). */
+function planSnapshot(s: MockState) {
+  const today = todayISO();
+  const plan = s.plan;
+  const monday = startOfWeek(today);
+  const sunday = addDays(monday, 6);
+  const mine = (plan ? s.sessions.filter((x) => x.planId === plan.id) : []).sort((a, b) =>
+    a.date.localeCompare(b.date),
+  );
+  const session = mine.find((x) => x.date === today) ?? null;
+  const week = mine.filter((x) => x.date >= monday && x.date <= sunday);
+  const state: TodayState = !plan
+    ? "no_plan"
+    : !session
+      ? "rest_day"
+      : session.status === "completed" || session.status === "partial"
+        ? "done"
+        : session.status === "missed"
+          ? "missed"
+          : "to_do";
+  const following = mine.find((x) => x.date > today && MOVABLE_STATUSES.includes(x.status));
+  const next: NextSession | null = following
+    ? {
+        date: following.date,
+        activityType: following.activityType,
+        intensityBand: following.intensityBand,
+        targetDurationMin: following.targetDurationMin,
+      }
+    : null;
+  return {
+    today,
+    plan,
+    session,
+    state,
+    next,
+    logged: session ? (s.workouts.find((w) => w.plannedSessionId === session.id) ?? null) : null,
+    week: {
+      start: monday,
+      end: sunday,
+      plannedSessions: week.length,
+      completedSessions: week.filter((x) => x.status === "completed" || x.status === "partial").length,
+      missedSessions: week.filter((x) => x.status === "missed").length,
+      loggedMinutes: s.workouts
+        .filter((w) => w.date >= monday && w.date <= sunday)
+        .reduce((sum, w) => sum + w.actualDurationMin, 0),
+    },
+  };
+}
+
+/** The built-in coach text, the same wording the backend falls back to. */
+function coachFallback(snapshot: ReturnType<typeof planSnapshot>): string {
+  const { state, session, week } = snapshot;
+  if (state === "no_plan") {
+    return "There's no training plan yet. Generate one on the Plan tab and today's workout will show up here.";
+  }
+  const progress =
+    week.plannedSessions > 0
+      ? `You've done ${week.completedSessions} of ${week.plannedSessions} planned sessions this week.`
+      : "";
+  const advice = { push: "Warm up well and make the hard part count.", light: "Keep it easy and conversational.", deload: "Take it gently, this week is about recovery." };
+  const lead =
+    state === "rest_day"
+      ? "Rest day today: nothing is planned, so recovery is the workout."
+      : state === "done"
+        ? "Nice work, today's session is done."
+        : state === "missed"
+          ? "Today's session was marked as missed. If you did it after all, you can still log it."
+          : `Today is a ${session?.intensityBand} ${session?.activityType} session of about ${session?.targetDurationMin} minutes. ${session ? advice[session.intensityBand] : ""}`;
+  return [lead.trim(), progress].filter(Boolean).join(" ");
+}
+
 export const mockTrainingApi: TrainingApi = {
   async getPreferences() {
     await delay();
@@ -563,6 +638,48 @@ export const mockTrainingApi: TrainingApi = {
       sleepHours: s.sleepHours,
     };
     return clone(view);
+  },
+
+  async getSummary() {
+    await delay();
+    const s = getState();
+    const snap = planSnapshot(s);
+    const readiness = readinessFor(
+      snap.today,
+      snap.session?.intensityBand ?? null,
+      s.sleepHours,
+      s.preferences?.examDates ?? [],
+    );
+    const summary: TrainingSummary = {
+      date: snap.today,
+      hasPlan: snap.plan !== null,
+      goal: snap.plan?.goal ?? null,
+      readiness,
+      today: {
+        state: snap.state,
+        session: snap.session,
+        recommendation:
+          snap.state === "to_do" && snap.session ? reconcile(snap.session, readiness) : null,
+        logged: snap.logged,
+      },
+      week: snap.week,
+      nextSession: snap.next,
+    };
+    return clone(summary);
+  },
+
+  async getCoachMessage() {
+    await delay(250);
+    const snap = planSnapshot(getState());
+    const message: CoachMessage = {
+      date: snap.today,
+      message: coachFallback(snap),
+      source: "fallback",
+      model: null,
+      cached: false,
+      notice: PLAN_NOTICE,
+    };
+    return ok(message);
   },
 
   async respondToSession(id, response) {

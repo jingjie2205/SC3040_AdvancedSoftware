@@ -13,6 +13,7 @@ import type { MoveRefusalCode } from "./rules";
 import type { LogWorkoutInput, TrainingPreferencesInput } from "./schemas";
 import type {
   ActivityType,
+  CoachMessage,
   ModelInfo,
   PlannedSession,
   Schedule,
@@ -20,6 +21,7 @@ import type {
   TodayView,
   TrainingPlan,
   TrainingPreferences,
+  TrainingSummary,
   WorkoutSession,
 } from "./types";
 
@@ -34,6 +36,7 @@ export type ApiErrorCode =
   | "INVALID_STATE"
   | "UNAUTHORIZED"
   | "UNAVAILABLE"
+  | "RATE_LIMITED"
   | "NETWORK"
   | "SERVER_ERROR"
   | MoveRefusalCode;
@@ -82,6 +85,10 @@ export interface TrainingApi {
   removeSession(id: string): Promise<ApiResult<RemoveResult>>;
 
   getToday(): Promise<TodayView>;
+  /** One read for the Home page: readiness, today's session, the week so far and what is next. */
+  getSummary(): Promise<TrainingSummary>;
+  /** A short note about today from Gemini (or the built-in text). Can be refused for asking too fast. */
+  getCoachMessage(): Promise<ApiResult<CoachMessage>>;
   getReadinessModel(): Promise<ModelInfo>;
   /** Last night's sleep, filed under today. Entering it again replaces it. */
   logSleep(hours: number): Promise<ApiResult<SleepEntry>>;

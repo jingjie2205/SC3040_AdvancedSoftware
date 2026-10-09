@@ -15,6 +15,7 @@ import type {
   TrainingApi,
 } from "./api";
 import type {
+  CoachMessage,
   ModelInfo,
   PlannedSession,
   Schedule,
@@ -22,6 +23,7 @@ import type {
   TodayView,
   TrainingPlan,
   TrainingPreferences,
+  TrainingSummary,
 } from "./types";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -153,6 +155,8 @@ export const httpTrainingApi: TrainingApi = {
   removeSession: (id) => request<RemoveResult>("DELETE", sessionPath(id)),
 
   getToday: () => read<TodayView>("/today"),
+  getSummary: () => read<TrainingSummary>("/summary"),
+  getCoachMessage: () => request<CoachMessage>("POST", "/coach"),
   getReadinessModel: () => read<ModelInfo>("/model", READINESS_URL),
   logSleep: (hours) => request<SleepEntry>("PUT", "/sleep", { hours }),
   clearSleep: () => request<void>("DELETE", "/sleep"),
