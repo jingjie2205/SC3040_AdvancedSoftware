@@ -78,7 +78,7 @@ def _parse_date(value: Optional[str]) -> Optional[date]:
 
 
 def _get_stats_row(supabase: Client, user_id: str) -> Optional[dict]:
-    res = supabase.table("gamification_stats").select("*").eq("user_id", user_id).limit(1).execute()
+    res = supabase.table("gamification_user_stats").select("*").eq("user_id", user_id).limit(1).execute()
     return res.data[0] if res.data else None
 
 
@@ -122,7 +122,7 @@ def award_xp(
     # increment. Acceptable for the prototype; move into a SQL function if that changes.
     row = _get_stats_row(supabase, user_id)
     new_total = (row["total_xp"] if row else 0) + amount
-    supabase.table("gamification_stats").upsert(
+    supabase.table("gamification_user_stats").upsert(
         {"user_id": user_id, "total_xp": new_total, "updated_at": datetime.now(timezone.utc).isoformat()},
         on_conflict="user_id",
     ).execute()
@@ -160,7 +160,7 @@ def perform_checkin(supabase: Client, user_id: str, metrics: dict, today: date) 
     checkin_id = res.data[0]["id"]
 
     total_xp = award_xp(supabase, user_id, "checkin", xp, checkin_id)
-    supabase.table("gamification_stats").update(
+    supabase.table("gamification_user_stats").update(
         {
             "current_streak": streak,
             "longest_streak": max(row.get("longest_streak", 0), streak),
@@ -181,7 +181,7 @@ def perform_checkin(supabase: Client, user_id: str, metrics: dict, today: date) 
 def get_leaderboard(
     supabase: Client, user_id: str, metric: LeaderboardMetric, limit: int, today: date
 ) -> list:
-    query = supabase.table("gamification_stats").select(
+    query = supabase.table("gamification_user_stats").select(
         "user_id,total_xp,current_streak,last_check_in_date"
     )
     if metric == LeaderboardMetric.STREAK:

@@ -28,13 +28,13 @@ CAROL = "00000000-0000-0000-0000-00000000000c"
 # constraints in supabase/schema.sql that the service relies on.
 # ---------------------------------------------------------------------------
 UNIQUE_KEYS = {
-    "gamification_stats": ("user_id",),
+    "gamification_user_stats": ("user_id",),
     "daily_checkins": ("user_id", "date"),
     "xp_events": ("source", "source_id"),
     "challenge_participants": ("challenge_id", "user_id"),
 }
 DEFAULTS = {
-    "gamification_stats": {"total_xp": 0, "current_streak": 0, "longest_streak": 0, "last_check_in_date": None},
+    "gamification_user_stats": {"total_xp": 0, "current_streak": 0, "longest_streak": 0, "last_check_in_date": None},
 }
 
 
