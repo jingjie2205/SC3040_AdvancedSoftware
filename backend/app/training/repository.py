@@ -89,6 +89,8 @@ class TrainingRepository(Protocol):
         self, user_id: str, day: date
     ) -> Optional[Tuple[ReadinessScore, str]]: ...
 
+    def award_workout_xp(self, user_id: str, workout_id: str) -> None: ...
+
     def save_readiness(self, user_id: str, score: ReadinessScore, feature_hash: str) -> None: ...
 
     def list_readiness(self, user_id: str, start: date, end: date) -> List[ReadinessScore]: ...
@@ -264,6 +266,24 @@ class SupabaseTrainingRepository:
                 "UNAVAILABLE",
                 "Sleep tracking isn't set up on this database yet. Apply the latest training migration first.",
             ) from error
+
+    # ------------------------------------------------------------------ leaderboard XP
+
+    def award_workout_xp(self, user_id: str, workout_id: str) -> None:
+        """
+        A logged workout earns XP on the leaderboard, through the helper the gamification feature
+        provides for other features. It ignores the same workout twice, so a retry is harmless. The
+        leaderboard's tables may not be on the database yet, in which case there is nothing to award
+        and one warning is logged.
+        """
+        from ..services.gamification import XP_REWARDS, award_xp  # not at import time: keeps this package standalone
+
+        try:
+            award_xp(self.db, user_id, "workout", XP_REWARDS["workout"], workout_id)
+        except APIError as error:
+            if error.code not in _SCHEMA_NOT_READY:
+                raise
+            _warn_once(f"xp:{error.code}", "Leaderboard tables not ready (%s); workout XP not awarded", error.code)
 
     def get_cached_readiness(
         self, user_id: str, day: date

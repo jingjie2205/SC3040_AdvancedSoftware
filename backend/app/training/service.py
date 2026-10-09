@@ -505,15 +505,24 @@ class TrainingService:
         # Tomorrow's readiness score picks this up on its own: its cached copy is keyed on the
         # inputs, so new history changes the key and the score is recomputed.
         self.repo.apply(user_id, ChangeSet(upsert_sessions=[updated], insert_workouts=[workout]))
+        self._award_workout_xp(user_id, workout.id)
         return LogResult(workout=workout, session=updated)
 
     def log_ad_hoc_session(self, user_id: str, today: date, data: LogWorkoutInput) -> LogResult:
         self._require_not_future(data.date, today)
         workout = self._workout_from(data, None)
         self.repo.apply(user_id, ChangeSet(insert_workouts=[workout]))
+        self._award_workout_xp(user_id, workout.id)
         return LogResult(workout=workout, session=None)
 
     # ------------------------------------------------------------------ internals
+
+    def _award_workout_xp(self, user_id: str, workout_id: str) -> None:
+        """XP for the leaderboard. The workout is already saved, so nothing here may make the log fail."""
+        try:
+            self.repo.award_workout_xp(user_id, workout_id)
+        except Exception as error:  # noqa: BLE001 - an optional side effect, whatever goes wrong with it
+            logger.warning("XP for a logged workout wasn't recorded: %s", type(error).__name__)
 
     def _require_session(self, user_id: str, session_id: str) -> PlannedSession:
         session = self.repo.get_session(user_id, session_id)

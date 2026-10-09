@@ -172,6 +172,13 @@ harness isn't part of the repo.
   day in `training_sleep_logs` and only the entry for the day being scored counts. It is the
   `sleep_hours` feature, and it wins over a check-in's own sleep answer if one ever carries one.
   Saving it again replaces it; the cached score is keyed on its inputs, so the next read recomputes.
+- **A logged workout earns leaderboard XP.** Once a workout is saved (a planned session or an ad hoc one), the
+  service calls the gamification feature's `award_xp(…, "workout", XP_REWARDS["workout"], workout_id)`. The
+  workout's id is the `source_id`, so a retry counts once, and only that id goes across, never what was logged.
+  It is best effort: the workout is already saved, so any failure is logged and the log still succeeds, and if
+  the leaderboard's tables aren't on the database yet one warning is logged and nothing is awarded. The helper
+  is imported inside the method, so the training routes still load if the gamification module has a problem
+  (`test_training_xp.py`).
 
 ## The Home summary and the coach
 
