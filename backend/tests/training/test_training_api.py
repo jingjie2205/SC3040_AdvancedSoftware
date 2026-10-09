@@ -12,8 +12,10 @@ from fastapi.testclient import TestClient
 from app.commons.auth import deps
 from app.commons.auth.deps import get_current_user_id
 from app.training.clock import get_client_date
+from app.training.config import RULES
 from app.training import router as router_module
 from app.training.ml.scorer import ModelScorer, load_scorer
+from app.training.planner import AthleteProfile
 from app.training.readiness import RuleBasedScorer
 from app.training.router import TRAINING_PREFIX, get_service, install, readiness_router, router
 from app.training.service import TrainingService
@@ -337,6 +339,98 @@ def test_scoring_endpoint_is_stateless_and_validated(client, repo):
 
     assert client.post("/api/v1/readiness/score", json={"sleepHours": 99}, headers=headers()).status_code == 422
     assert client.post("/api/v1/readiness/score", json=features).status_code == 401
+
+
+# ------------------------------------------------------------------ goal, exam dates and sleep
+
+
+def put_sleep(client, hours, user: str = USER_A):
+    return client.put("/api/v1/training/sleep", json={"hours": hours}, headers=headers(user))
+
+
+def today_body(client, user: str = USER_A) -> dict:
+    return client.get("/api/v1/training/today", headers=headers(user)).json()
+
+
+def test_sleep_is_logged_for_the_users_today_and_feeds_the_readiness_card(client):
+    before = today_body(client)
+    assert before["sleepHours"] is None
+    saved = put_sleep(client, 5.5)
+    assert saved.status_code == 200 and saved.json() == {"date": TODAY.isoformat(), "hours": 5.5}
+    after = today_body(client)
+    assert after["sleepHours"] == 5.5 and after["readiness"]["score"] < before["readiness"]["score"]
+    assert any(f["key"] == "sleep" and f["detail"] == "5.5 h last night" for f in after["readiness"]["factors"])
+
+
+def test_one_users_sleep_is_invisible_to_everyone_else(client):
+    put_sleep(client, 3)
+    mine, other = today_body(client, USER_A), today_body(client, USER_B)
+    assert other["sleepHours"] is None and other["readiness"]["score"] > mine["readiness"]["score"]
+
+
+@pytest.mark.parametrize("body", [{"hours": -1}, {"hours": 17}, {}, {"hours": "lots"}, {"hours": None}])
+def test_bad_sleep_is_a_validation_error_and_nothing_is_stored(client, repo, body):
+    response = client.put("/api/v1/training/sleep", json=body, headers=headers())
+    detail = response.json()["detail"]
+    assert response.status_code == 422 and detail["code"] == "VALIDATION" and "hours" in detail["fieldErrors"]
+    assert repo.sleep == {}
+
+
+def test_sleep_can_be_cleared_again(client, repo):
+    put_sleep(client, 6)
+    assert client.delete("/api/v1/training/sleep", headers=headers()).status_code == 204
+    assert repo.sleep == {} and today_body(client)["sleepHours"] is None
+
+
+def test_the_sleep_routes_need_a_token(client, repo):
+    assert client.put("/api/v1/training/sleep", json={"hours": 6}).status_code in (401, 403)
+    assert client.delete("/api/v1/training/sleep").status_code in (401, 403)
+    assert client.put("/api/v1/training/sleep", json={"hours": 6}, headers={"Authorization": "Bearer forged"}).status_code == 401
+    assert repo.sleep == {}
+
+
+def test_exam_dates_come_back_sorted_and_an_exam_that_has_passed_is_dropped(client):
+    soon, later, gone = (TODAY + timedelta(days=3)).isoformat(), (TODAY + timedelta(days=10)).isoformat(), (TODAY - timedelta(days=1)).isoformat()
+    saved = client.put("/api/v1/training/preferences", json={**PREFS, "examDates": [later, gone, soon]}, headers=headers()).json()
+    assert saved["examDates"] == [soon, later]
+    assert client.get("/api/v1/training/preferences", headers=headers()).json()["examDates"] == [soon, later]
+
+
+def test_exam_dates_are_optional(client):
+    assert client.put("/api/v1/training/preferences", json=PREFS, headers=headers()).json()["examDates"] == []
+
+
+@pytest.mark.parametrize("dates", [
+    [(TODAY + timedelta(days=i)).isoformat() for i in range(RULES.exam_dates_max + 1)],
+    [(TODAY + timedelta(days=RULES.exam_dates_horizon_days + 1)).isoformat()],
+    ["2026-13-45"],
+    ["soon"],
+])
+def test_too_many_too_distant_or_malformed_exam_dates_are_field_errors(client, dates):
+    response = client.put("/api/v1/training/preferences", json={**PREFS, "examDates": dates}, headers=headers())
+    detail = response.json()["detail"]
+    assert response.status_code == 422 and detail["code"] == "VALIDATION"
+    assert any(key.startswith("examDates") for key in detail["fieldErrors"])
+    assert client.get("/api/v1/training/preferences", headers=headers()).json() is None
+
+
+def test_an_exam_date_lowers_todays_readiness_over_http(client):
+    before = today_body(client)
+    exam = (TODAY + timedelta(days=1)).isoformat()
+    assert client.put("/api/v1/training/preferences", json={**PREFS, "examDates": [exam]}, headers=headers()).status_code == 200
+    after = today_body(client)
+    assert after["readiness"]["score"] < before["readiness"]["score"]
+    assert any(f["key"] == "exam" and f["detail"] == "Exam in 1 day" for f in after["readiness"]["factors"])
+
+
+def test_the_plan_reports_the_goal_it_was_built_for(client, repo):
+    onboard(client, repo)
+    assert generate(client).json()["goal"] is None  # no profile, no goal
+
+    repo.profiles[USER_A] = AthleteProfile(fitness_goal="DEFICIT")
+    plan = generate(client, confirm=True).json()
+    assert plan["goal"] == "lose_weight"
+    assert client.get("/api/v1/training/plan", headers=headers()).json()["goal"] == "lose_weight"
 
 
 # ------------------------------------------------------------------ Hard Rule 4: readiness stays private

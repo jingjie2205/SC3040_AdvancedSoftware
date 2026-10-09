@@ -33,7 +33,7 @@ def make() -> tuple:
 
 def onboarded(user: str = USER_A) -> tuple:
     service, repo = make()
-    service.save_preferences(user, STANDARD_PREFS)
+    service.save_preferences(user, TODAY, STANDARD_PREFS)
     seed_history(repo, user, MONDAY)
     return service, repo
 
@@ -60,7 +60,7 @@ def error_of(call) -> TrainingError:
 
 def test_preferences_round_trip_and_are_per_user():
     service, _ = make()
-    saved = service.save_preferences(USER_A, STANDARD_PREFS)
+    saved = service.save_preferences(USER_A, TODAY, STANDARD_PREFS)
     assert service.get_preferences(USER_A) == saved
     assert service.get_preferences(USER_B) is None
 
@@ -87,7 +87,7 @@ def test_a_generated_plan_carries_the_medical_notice_and_a_baseline_from_history
 def _first_plan(profile=None, user: str = USER_A):
     """A brand-new user (no history) generating their first plan."""
     service, repo = make()
-    service.save_preferences(user, STANDARD_PREFS)
+    service.save_preferences(user, TODAY, STANDARD_PREFS)
     if profile:
         repo.profiles[user] = profile
     return service, service.generate_plan(user, TODAY, GeneratePlanRequest(weeks=4))
@@ -113,7 +113,7 @@ def test_logged_history_beats_the_profile_when_generating():
 
 def test_one_users_profile_never_shapes_another_users_plan():
     service, repo = make()
-    service.save_preferences(USER_B, STANDARD_PREFS)
+    service.save_preferences(USER_B, TODAY, STANDARD_PREFS)
     repo.profiles[USER_A] = AthleteProfile(activity_level="SEDENTARY")
     plan = service.generate_plan(USER_B, TODAY, GeneratePlanRequest(weeks=4))
     assert plan.baseline_volume == RULES.default_baseline_volume
@@ -480,7 +480,7 @@ def test_ad_hoc_sessions_are_logged_without_a_plan_entry():
 
 def test_another_users_data_is_invisible_and_untouchable():
     service, repo, plan = with_plan(USER_A)
-    service.save_preferences(USER_B, STANDARD_PREFS)
+    service.save_preferences(USER_B, TODAY, STANDARD_PREFS)
     a_session = repo.list_sessions(USER_A, TODAY, TODAY)[0]
     service.get_today(USER_A, TODAY)  # writes A's readiness
 
@@ -502,7 +502,7 @@ def test_another_users_data_is_invisible_and_untouchable():
 
 def test_replacing_one_users_plan_does_not_touch_the_other():
     service, repo, plan_a = with_plan(USER_A)
-    service.save_preferences(USER_B, STANDARD_PREFS)
+    service.save_preferences(USER_B, TODAY, STANDARD_PREFS)
     seed_history(repo, USER_B, MONDAY)
     service.generate_plan(USER_B, TODAY, GeneratePlanRequest(weeks=4))
     service.generate_plan(USER_B, TODAY, GeneratePlanRequest(weeks=4, confirm_replace=True))

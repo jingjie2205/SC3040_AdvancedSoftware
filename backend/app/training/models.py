@@ -20,6 +20,7 @@ from pydantic.alias_generators import to_camel
 from .config import RULES
 
 ActivityType = Literal["run", "gym", "cycling", "bodyweight"]
+Goal = Literal["lose_weight", "maintain", "build_muscle"]
 Weekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 IntensityBand = Literal["deload", "light", "push"]
 SessionStatus = Literal["planned", "accepted", "completed", "partial", "missed", "moved"]
@@ -42,6 +43,13 @@ class TrainingPreferencesInput(ApiModel):
     )
     activity_types: List[ActivityType] = Field(min_length=1)
     rest_days: List[Weekday] = Field(default_factory=list)
+    # Upcoming exams, which weigh on readiness in the days before one. Optional, and private to the user.
+    exam_dates: List[date] = Field(default_factory=list, max_length=RULES.exam_dates_max)
+
+    @field_validator("exam_dates")
+    @classmethod
+    def _sorted_unique_exam_dates(cls, value: list) -> list:
+        return sorted(set(value))
 
     @field_validator("activity_types")
     @classmethod
@@ -87,6 +95,8 @@ class TrainingPlan(ApiModel):
     baseline_volume: float
     created_at: datetime
     notice: str
+    # The profile goal this plan was built for, as it stood when it was generated or last adapted.
+    goal: Optional[Goal] = None
     last_adaptation: Optional[PlanAdaptation] = None
 
 
@@ -165,6 +175,8 @@ class TodayView(ApiModel):
     planned: Optional[PlannedSession] = None
     recommendation: Optional[SessionRecommendation] = None
     logged: Optional[WorkoutSession] = None
+    # Last night's sleep as the user entered it today, so the readiness card can show it.
+    sleep_hours: Optional[float] = None
 
 
 class Schedule(ApiModel):
@@ -179,6 +191,11 @@ class RemoveResult(ApiModel):
 class LogResult(ApiModel):
     workout: WorkoutSession
     session: Optional[PlannedSession] = None
+
+
+class SleepEntry(ApiModel):
+    date: date
+    hours: float
 
 
 # --------------------------------------------------------------------------- requests
@@ -202,6 +219,10 @@ class SessionResponseRequest(ApiModel):
         if self.action == "swap" and self.activity_type is None:
             raise ValueError("Choose an activity type to swap to")
         return self
+
+
+class SleepInput(ApiModel):
+    hours: float = Field(ge=0, le=RULES.sleep_hours_max)
 
 
 class LogWorkoutInput(ApiModel):

@@ -21,6 +21,8 @@ from .models import (
     Schedule,
     ScoreResult,
     SessionResponseRequest,
+    SleepEntry,
+    SleepInput,
     TodayView,
     TrainingPlan,
     TrainingPreferences,
@@ -28,17 +30,26 @@ from .models import (
     WorkoutSession,
 )
 from .planner import (
+    AthleteProfile,
     Baseline,
     WeekTarget,
     baseline_from_history,
     build_sessions,
     first_unsafe_week,
+    goal_for,
     plan_end_date,
     round_half_up,
     week_start,
     weekly_targets,
 )
-from .readiness import ActivityRecord, ReadinessFeatures, ReadinessScorer, build_features, fingerprint
+from .readiness import (
+    ActivityRecord,
+    ReadinessFeatures,
+    ReadinessScorer,
+    build_features,
+    days_until_next_exam,
+    fingerprint,
+)
 from .repository import ChangeSet, TrainingRepository
 from .rules import LOGGABLE_STATUSES, MOVABLE_STATUSES, MoveContext, check_move, reconcile
 
@@ -69,8 +80,23 @@ class TrainingService:
     def get_preferences(self, user_id: str) -> Optional[TrainingPreferences]:
         return self.repo.get_preferences(user_id)
 
-    def save_preferences(self, user_id: str, data: TrainingPreferencesInput) -> TrainingPreferences:
-        preferences = TrainingPreferences(**data.model_dump(), updated_at=_now())
+    def save_preferences(
+        self, user_id: str, today: date, data: TrainingPreferencesInput
+    ) -> TrainingPreferences:
+        horizon = today + timedelta(days=self.rules.exam_dates_horizon_days)
+        if any(day > horizon for day in data.exam_dates):
+            raise TrainingError(
+                "VALIDATION",
+                "Check the highlighted fields.",
+                field_errors={
+                    "examDates": f"Exam dates can be at most {self.rules.exam_dates_horizon_days} days ahead"
+                },
+            )
+        # An exam that has passed no longer matters, so it isn't kept.
+        upcoming = [day for day in data.exam_dates if day >= today]
+        preferences = TrainingPreferences(
+            **{**data.model_dump(), "exam_dates": upcoming}, updated_at=_now()
+        )
         self.repo.save_preferences(user_id, preferences)
         return preferences
 
@@ -89,7 +115,9 @@ class TrainingService:
         if existing and not request.confirm_replace:
             raise TrainingError("PLAN_EXISTS", "You already have an active plan. Confirm to replace it.")
 
-        baseline = self._baseline(user_id, today)
+        profile = self.repo.get_profile(user_id)
+        goal = goal_for(profile, self.rules)
+        baseline = self._baseline(user_id, today, profile)
         targets = weekly_targets(baseline.volume, request.weeks, 0, self.rules)
         self._require_safe(targets)
 
@@ -103,6 +131,7 @@ class TrainingService:
             baseline_volume=baseline.volume,
             created_at=_now(),
             notice=PLAN_NOTICE,
+            goal=goal,
             last_adaptation=None,
         )
 
@@ -116,7 +145,7 @@ class TrainingService:
             if existing and s.plan_id == existing.id and s.status in MOVABLE_STATUSES
         ]
         taken = {s.date for s in upcoming if s.id not in drop}
-        sessions = self._new_sessions(plan.id, preferences, start, targets, today, taken)
+        sessions = self._new_sessions(plan.id, preferences, start, targets, today, taken, goal)
 
         self.repo.apply(
             user_id,
@@ -216,13 +245,15 @@ class TrainingService:
                 (s for s in self.repo.list_sessions(user_id, today, today) if s.plan_id == plan.id),
                 None,
             )
-        readiness = self._readiness(user_id, today)
+        sleep_hours = self.repo.get_sleep(user_id, today)
+        readiness = self._readiness(user_id, today, sleep_hours)
         return TodayView(
             date=today,
             readiness=readiness,
             planned=planned,
             recommendation=reconcile(planned, readiness, self.rules) if planned else None,
             logged=self.repo.get_workout_for_session(user_id, planned.id) if planned else None,
+            sleep_hours=sleep_hours,
         )
 
     def respond_to_session(
@@ -252,6 +283,16 @@ class TrainingService:
 
     def score_features(self, features: ReadinessFeatures) -> ScoreResult:
         return self.scorer.score(features)
+
+    def log_sleep(self, user_id: str, today: date, data: SleepInput) -> SleepEntry:
+        """Last night's sleep, filed under today. Entering it again replaces it. The next read of
+        today's readiness picks it up on its own, because the cached score is keyed on its inputs."""
+        hours = round(data.hours, 2)
+        self.repo.save_sleep(user_id, today, hours)
+        return SleepEntry(date=today, hours=hours)
+
+    def clear_sleep(self, user_id: str, today: date) -> None:
+        self.repo.delete_sleep(user_id, today)
 
     # ------------------------------------------------------------------ logging (T-5)
 
@@ -320,10 +361,9 @@ class TrainingService:
             created_at=_now(),
         )
 
-    def _baseline(self, user_id: str, today: date) -> Baseline:
+    def _baseline(self, user_id: str, today: date, profile: Optional[AthleteProfile]) -> Baseline:
         window_start = week_start(today) - timedelta(weeks=self.rules.baseline_window_weeks)
         workouts = self.repo.list_workouts(user_id, window_start, today)
-        profile = self.repo.get_profile(user_id)
         return baseline_from_history(
             workouts, today, self.rules, profile.activity_level if profile else None
         )
@@ -336,8 +376,9 @@ class TrainingService:
         targets: Sequence[WeekTarget],
         from_date: date,
         taken: Set[date],
+        goal: Optional[str] = None,
     ) -> List[PlannedSession]:
-        drafts = build_sessions(preferences, start, targets, from_date, self.rules)
+        drafts = build_sessions(preferences, start, targets, from_date, self.rules, goal)
         return [
             PlannedSession(
                 id=_new_id(),
@@ -353,10 +394,17 @@ class TrainingService:
             if d.date not in taken
         ]
 
-    def _readiness(self, user_id: str, today: date) -> ReadinessScore:
+    def _readiness(self, user_id: str, today: date, sleep_hours: Optional[float]) -> ReadinessScore:
         history = self.repo.list_workouts(user_id, today - timedelta(days=28), today - timedelta(days=1))
         records = [ActivityRecord(w.date, w.actual_volume, w.avg_hr, w.source) for w in history]
-        features = build_features(records, self.repo.get_latest_checkin(user_id, today), today)
+        preferences = self.repo.get_preferences(user_id)
+        features = build_features(
+            records,
+            self.repo.get_latest_checkin(user_id, today),
+            today,
+            days_until_next_exam(preferences.exam_dates if preferences else [], today),
+            sleep_hours=sleep_hours,
+        )
         digest = fingerprint(features, self.scorer.version)
 
         cached = self.repo.get_cached_readiness(user_id, today)
@@ -378,7 +426,9 @@ class TrainingService:
         if today > plan.end_date:
             raise TrainingError("PLAN_ENDED", "Your plan has finished. Generate a new one instead.")
 
-        baseline = self._baseline(user_id, today)
+        profile = self.repo.get_profile(user_id)
+        goal = goal_for(profile, self.rules)
+        baseline = self._baseline(user_id, today, profile)
         monday = week_start(today)
         weeks_elapsed = max(0, (monday - plan.start_date).days // 7)
         remaining = plan.weeks - weeks_elapsed
@@ -388,7 +438,7 @@ class TrainingService:
         upcoming = self.repo.list_sessions(user_id, today, plan.end_date)
         drop = [s.id for s in upcoming if s.plan_id == plan.id and s.status in MOVABLE_STATUSES]
         taken = {s.date for s in upcoming if s.id not in drop}
-        sessions = self._new_sessions(plan.id, preferences, monday, targets, today, taken)
+        sessions = self._new_sessions(plan.id, preferences, monday, targets, today, taken, goal)
 
         weeks = self.rules.baseline_window_weeks
         if baseline.used_default:
@@ -410,6 +460,7 @@ class TrainingService:
         adapted = plan.model_copy(
             update={
                 "baseline_volume": baseline.volume,
+                "goal": goal,
                 "last_adaptation": PlanAdaptation(
                     trigger=trigger,
                     reason=reason,

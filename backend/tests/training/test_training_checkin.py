@@ -8,7 +8,6 @@ the same user's readiness card.
 """
 from dataclasses import fields, replace
 from datetime import date, timedelta
-from types import SimpleNamespace
 
 import pytest
 from postgrest.exceptions import APIError
@@ -19,71 +18,9 @@ from app.training.ml.scorer import ModelScorer, load_scorer
 from app.training.readiness import Checkin, ReadinessFeatures, RuleBasedScorer, build_features, fingerprint
 from app.training.repository import SupabaseTrainingRepository
 from app.training.service import TrainingService
-from training_fakes import TODAY, USER_A, USER_B, FakeTrainingRepository
+from training_fakes import TODAY, USER_A, USER_B, FakeTrainingRepository, TableClient
 
 DAY = date(2026, 10, 7)
-
-
-class FilteringQuery:
-    """Applies what PostgREST would: filters, ordering, limit and column projection."""
-
-    def __init__(self, client, table):
-        self.client, self.table = client, table
-        self.columns, self.filters, self.order_by, self.max_rows = "*", [], None, None
-
-    def select(self, columns="*"):
-        self.columns = columns
-        return self
-
-    def eq(self, column, value):
-        self.filters.append(("eq", column, value))
-        return self
-
-    def gte(self, column, value):
-        self.filters.append(("gte", column, value))
-        return self
-
-    def lte(self, column, value):
-        self.filters.append(("lte", column, value))
-        return self
-
-    def order(self, column, desc=False):
-        self.order_by = (column, desc)
-        return self
-
-    def limit(self, count):
-        self.max_rows = count
-        return self
-
-    def execute(self):
-        self.client.requests.append(self)
-        if self.client.error:
-            raise self.client.error
-        rows = [dict(row) for row in self.client.tables.get(self.table, [])]
-        for op, column, value in self.filters:
-            rows = [
-                r for r in rows
-                if (op == "eq" and r[column] == value)
-                or (op == "gte" and r[column] >= value)
-                or (op == "lte" and r[column] <= value)
-            ]
-        if self.order_by:
-            column, desc = self.order_by
-            rows.sort(key=lambda r: r[column], reverse=desc)
-        if self.max_rows is not None:
-            rows = rows[: self.max_rows]
-        if self.columns != "*":
-            wanted = [c.strip() for c in self.columns.split(",")]
-            rows = [{c: r[c] for c in wanted} for r in rows]
-        return SimpleNamespace(data=rows)
-
-
-class TableClient:
-    def __init__(self, tables=None, error=None):
-        self.tables, self.error, self.requests = tables or {}, error, []
-
-    def table(self, name):
-        return FilteringQuery(self, name)
 
 
 def checkin_row(user, day, soreness=3, mood=4, diet=2):

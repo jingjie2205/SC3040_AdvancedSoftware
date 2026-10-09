@@ -1,7 +1,8 @@
 """In-memory stand-ins for the database, faithful to what the real one enforces."""
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from types import SimpleNamespace
+from typing import Callable, Dict, List, Optional, Tuple
 
 from app.training.models import (
     PlannedSession,
@@ -48,6 +49,7 @@ class FakeTrainingRepository:
         self.readiness: Dict[Tuple[str, date], Tuple[ReadinessScore, str]] = {}
         self.checkins: Dict[str, Checkin] = {}
         self.profiles: Dict[str, AthleteProfile] = {}
+        self.sleep: Dict[Tuple[str, date], float] = {}
         self.apply_calls = 0
 
     # ---------------------------------------------------------------- reads
@@ -87,6 +89,15 @@ class FakeTrainingRepository:
 
     def get_latest_checkin(self, user_id: str, on_or_before: date) -> Optional[Checkin]:
         return self.checkins.get(user_id)
+
+    def get_sleep(self, user_id: str, day: date) -> Optional[float]:
+        return self.sleep.get((user_id, day))
+
+    def save_sleep(self, user_id: str, day: date, hours: float) -> None:
+        self.sleep[(user_id, day)] = hours
+
+    def delete_sleep(self, user_id: str, day: date) -> None:
+        self.sleep.pop((user_id, day), None)
 
     def get_cached_readiness(
         self, user_id: str, day: date
@@ -171,3 +182,101 @@ def seed_history(repo: FakeTrainingRepository, user_id: str, weeks_before: date,
         for offset in (0, 2, 5):
             w = workout(monday + timedelta(days=offset), volume_per_session)
             repo.workouts[w.id] = (user_id, w)
+
+
+class FilteringQuery:
+    """
+    Applies what PostgREST would: filters, ordering, limit and column projection for reads, and
+    upserts (merged on the conflict columns) and deletes (limited by the filters) for writes.
+    """
+
+    def __init__(self, client, table):
+        self.client, self.table = client, table
+        self.columns, self.filters, self.order_by, self.max_rows = "*", [], None, None
+        self.operation, self.payload, self.on_conflict = "select", None, None
+
+    def select(self, columns="*"):
+        self.columns = columns
+        return self
+
+    def eq(self, column, value):
+        self.filters.append(("eq", column, value))
+        return self
+
+    def gte(self, column, value):
+        self.filters.append(("gte", column, value))
+        return self
+
+    def lte(self, column, value):
+        self.filters.append(("lte", column, value))
+        return self
+
+    def order(self, column, desc=False):
+        self.order_by = (column, desc)
+        return self
+
+    def limit(self, count):
+        self.max_rows = count
+        return self
+
+    def upsert(self, row, on_conflict=None):
+        self.operation, self.payload, self.on_conflict = "upsert", dict(row), on_conflict
+        return self
+
+    def delete(self):
+        self.operation = "delete"
+        return self
+
+    def _matching(self, rows):
+        for op, column, value in self.filters:
+            rows = [
+                r for r in rows
+                if (op == "eq" and r[column] == value)
+                or (op == "gte" and r[column] >= value)
+                or (op == "lte" and r[column] <= value)
+            ]
+        return rows
+
+    def execute(self):
+        self.client.requests.append(self)
+        failure = self.client.error or (self.client.error_when(self) if self.client.error_when else None)
+        if failure:
+            raise failure
+        stored = self.client.tables.setdefault(self.table, [])
+        if self.operation == "upsert":
+            keys = [c.strip() for c in (self.on_conflict or "").split(",") if c.strip()]
+            for existing in stored:
+                if keys and all(existing.get(k) == self.payload.get(k) for k in keys):
+                    existing.update(self.payload)
+                    break
+            else:
+                stored.append(dict(self.payload))
+            return SimpleNamespace(data=[dict(self.payload)])
+        if self.operation == "delete":
+            doomed = self._matching([dict(r) for r in stored])
+            stored[:] = [r for r in stored if r not in doomed]
+            return SimpleNamespace(data=doomed)
+
+        rows = self._matching([dict(row) for row in stored])
+        if self.order_by:
+            column, desc = self.order_by
+            rows.sort(key=lambda r: r[column], reverse=desc)
+        if self.max_rows is not None:
+            rows = rows[: self.max_rows]
+        if self.columns != "*":
+            wanted = [c.strip() for c in self.columns.split(",")]
+            rows = [{c: r[c] for c in wanted} for r in rows]
+        return SimpleNamespace(data=rows)
+
+
+class TableClient:
+    """
+    A stand-in Supabase client over in-memory tables. `error` fails every request; `error_when` is called
+    with each request and may return an error to raise for just that one.
+    """
+
+    def __init__(self, tables=None, error=None, error_when: Optional[Callable] = None):
+        self.tables, self.error, self.error_when, self.requests = tables or {}, error, error_when, []
+
+    def table(self, name):
+        return FilteringQuery(self, name)

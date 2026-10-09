@@ -43,6 +43,29 @@ class TrainingRules:
         }
     )
 
+    # The goal on the user's profile tilts which of their chosen activities come up more often. It
+    # never adds an activity they didn't pick. A type listed here gets this many turns in the weekly
+    # rotation and every other type gets one, so "run": 2 means twice as many runs as an unlisted type.
+    goal_activity_weights: Dict[str, Dict[str, int]] = field(
+        default_factory=lambda: {
+            "lose_weight": {"run": 2, "cycling": 2},
+            "build_muscle": {"gym": 2, "bodyweight": 2},
+        }
+    )
+    # Settings stores the goal as one of three calorie-target values. This is what each one means here.
+    profile_goal_map: Dict[str, str] = field(
+        default_factory=lambda: {
+            "DEFICIT": "lose_weight",
+            "MAINTAIN": "maintain",
+            "SURPLUS": "build_muscle",
+        }
+    )
+
+    exam_dates_max: int = 10
+    # Further ahead than this is almost certainly a typo, and it can't affect a score anyway.
+    exam_dates_horizon_days: int = 730
+    sleep_hours_max: float = 16.0
+
     high_intensity_band: str = "push"
     partial_completion_ratio: float = 0.8
     move_search_days: int = 14

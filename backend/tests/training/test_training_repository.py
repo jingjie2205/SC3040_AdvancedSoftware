@@ -217,13 +217,13 @@ def test_the_repository_is_built_on_the_shared_supabase_admin_client(monkeypatch
 # ------------------------------------------------------------------ profile
 
 
-def test_the_profile_read_asks_for_one_column_scoped_to_the_user():
-    repo, client = repo_with({"users": [{"activity_level": "VERY_ACTIVE"}]})
-    assert repo.get_profile(USER_A) == AthleteProfile(activity_level="VERY_ACTIVE")
+def test_the_profile_read_asks_for_the_two_columns_it_uses_scoped_to_the_user():
+    repo, client = repo_with({"users": [{"activity_level": "VERY_ACTIVE", "fitness_goal": "SURPLUS"}]})
+    assert repo.get_profile(USER_A) == AthleteProfile(activity_level="VERY_ACTIVE", fitness_goal="SURPLUS")
     query = client.queries[-1]
     assert query.table_name == "users"
-    # The same table holds Strava tokens, so this must never become select("*").
-    assert query.selected == ("activity_level",)
+    # The same table holds Strava tokens and a password hash, so this must never become select("*").
+    assert query.selected == ("activity_level,fitness_goal",)
     assert ("eq", "user_id", USER_A) in query.filters
 
 

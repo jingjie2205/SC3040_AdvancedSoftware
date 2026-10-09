@@ -29,8 +29,8 @@ rule-based fallback; it is designed to be retrained on real labelled data when w
 
 - **Inputs.** The five signals in `ReadinessFeatures` (load ratio, heart-rate trend, check-in
   rating, sleep, days until an exam). Each becomes two network inputs: whether it is present, and
-  its value scaled to [-1, 1]. Missing signals are normal (check-ins, sleep and exam dates are not
-  wired up yet), so the cohort deliberately contains many rows with few or no signals.
+  its value scaled to [-1, 1]. Missing signals are normal (check-ins, sleep and exam dates are all
+  optional), so the cohort deliberately contains many rows with few or no signals.
 - **Network.** 10 inputs, two hidden ReLU layers (32 and 16), one output (score / 100). About 900
   weights, shipped as `artifacts/readiness_v1.json`.
 - **Score and band.** The output is rounded to 0 to 100. The band (`deload` / `light` / `push`)

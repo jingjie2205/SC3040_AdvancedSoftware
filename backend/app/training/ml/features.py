@@ -2,8 +2,8 @@
 How a `ReadinessFeatures` becomes the numbers the network sees.
 
 Each of the five signals becomes two inputs: whether it is present, and its value scaled to [-1, 1]
-(0 when missing). Missing is a normal state here (new users have no history, and check-ins and sleep
-do not exist yet), so the network is trained on it and never has to guess a value.
+(0 when missing). Missing is a normal state here (new users have no history, and check-ins, sleep and
+exam dates are all optional), so the network is trained on it and never has to guess a value.
 
 Values are clipped to the range the network was trained on. The rules saturate beyond these bounds
 anyway, so clipping never changes what the rules would say.
