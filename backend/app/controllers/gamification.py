@@ -11,6 +11,7 @@ from app.models.gamification import (
     GamificationStatsResponse,
     LeaderboardMetric,
     LeaderboardResponse,
+    XpHistoryResponse,
 )
 from app.commons.auth.deps import get_current_user_id, get_supabase_admin
 from app.services import gamification as gamification_service
@@ -24,6 +25,12 @@ async def get_my_stats(user_id: str = Depends(get_current_user_id)) -> Any:
     return gamification_service.get_stats(
         get_supabase_admin(), user_id, gamification_service.today_local()
     )
+
+
+@router.get("/xp-events", response_model=XpHistoryResponse)
+async def get_my_xp_history(user_id: str = Depends(get_current_user_id)) -> Any:
+    """The user's most recent XP awards, newest first."""
+    return {"events": gamification_service.get_xp_history(get_supabase_admin(), user_id)}
 
 
 @router.post("/checkins", response_model=DailyCheckInResponse, status_code=status.HTTP_201_CREATED)

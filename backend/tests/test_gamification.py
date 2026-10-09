@@ -30,7 +30,7 @@ CAROL = "00000000-0000-0000-0000-00000000000c"
 UNIQUE_KEYS = {
     "gamification_user_stats": ("user_id",),
     "daily_checkins": ("user_id", "date"),
-    "xp_events": ("source", "source_id"),
+    "xp_events": ("user_id", "source", "source_id"),
     "challenge_participants": ("challenge_id", "user_id"),
 }
 DEFAULTS = {
@@ -141,12 +141,46 @@ class FakeQuery:
         return SimpleNamespace(data=[dict(r) for r in matched])
 
 
+AWARDED_AT = "2026-10-05T04:00:00+00:00"
+
+
 class FakeSupabase:
     def __init__(self):
         self.db = {}
 
     def table(self, name):
         return FakeQuery(self.db, name)
+
+    def rpc(self, name, params):
+        """Mirrors award_gamification_xp in the gamification_xp_sources migration."""
+        assert name == "award_gamification_xp"
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=self._award(**params)))
+
+    def _award(self, p_user_id, p_source, p_source_id, p_amount):
+        events = self.db.setdefault("xp_events", [])
+        stats = self.db.setdefault("gamification_user_stats", [])
+        row = next((r for r in stats if r["user_id"] == p_user_id), None)
+        duplicate = p_source_id is not None and any(
+            (e["user_id"], e["source"], e.get("source_id")) == (p_user_id, p_source, p_source_id)
+            for e in events
+        )
+        if duplicate:
+            return row["total_xp"] if row else 0
+        events.append(
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": p_user_id,
+                "source": p_source,
+                "source_id": p_source_id,
+                "amount": p_amount,
+                "created_at": AWARDED_AT,
+            }
+        )
+        if row is None:
+            row = {"user_id": p_user_id, **DEFAULTS["gamification_user_stats"]}
+            stats.append(row)
+        row["total_xp"] += p_amount
+        return row["total_xp"]
 
 
 METRICS = {"muscleFatigue": 3, "mood": 4, "dietAdherence": 5}
@@ -335,7 +369,13 @@ def make_challenge(sb, metric="xp", target=100, start=TODAY, end=TODAY + timedel
 
 def add_xp_event(sb, user_id, source, amount, at_utc):
     sb.db.setdefault("xp_events", []).append(
-        {"user_id": user_id, "source": source, "amount": amount, "created_at": at_utc.isoformat()}
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "source": source,
+            "amount": amount,
+            "created_at": at_utc.isoformat(),
+        }
     )
 
 
@@ -486,3 +526,79 @@ def test_create_challenge_endpoint_validation(client, override):
         **override,
     }
     assert client.post("/gamification/challenges", json=body).status_code == 422
+
+
+# --- XP sources, history, rewards and names ---------------------------------
+
+def test_same_source_id_awards_each_user_once(sb):
+    challenge_id = str(uuid.uuid4())
+    assert svc.award_xp(sb, ALICE, "challenge", 100, challenge_id) == 100
+    assert svc.award_xp(sb, BOB, "challenge", 100, challenge_id) == 100
+    assert svc.award_xp(sb, ALICE, "challenge", 100, challenge_id) == 100
+
+
+def test_xp_history_is_newest_first_and_own_only(sb):
+    add_xp_event(sb, ALICE, "meal", 10, datetime(2026, 10, 4, 1, 0, tzinfo=timezone.utc))
+    add_xp_event(sb, ALICE, "workout", 50, datetime(2026, 10, 5, 1, 0, tzinfo=timezone.utc))
+    add_xp_event(sb, BOB, "workout", 50, datetime(2026, 10, 5, 2, 0, tzinfo=timezone.utc))
+
+    history = svc.get_xp_history(sb, ALICE)
+
+    assert [(e["source"], e["amount"]) for e in history] == [("workout", 50), ("meal", 10)]
+
+
+def test_completed_challenge_pays_reward_once(sb):
+    make_challenge(sb, metric="sessions", target=1)
+    add_xp_event(sb, ALICE, "workout", 50, datetime(2026, 10, 5, 4, 0, tzinfo=timezone.utc))
+
+    svc.list_challenges(sb, ALICE, TODAY)
+    [challenge] = svc.list_challenges(sb, ALICE, TODAY)
+
+    rewards = [e for e in sb.db["xp_events"] if e["source"] == "challenge"]
+    assert len(rewards) == 1
+    assert svc.get_stats(sb, ALICE, TODAY)["totalXp"] == challenge["rewardXp"] == 100
+
+
+def test_unfinished_or_invited_challenge_pays_nothing(sb):
+    challenge = make_challenge(sb, metric="sessions", target=2)
+    add_xp_event(sb, ALICE, "workout", 50, datetime(2026, 10, 5, 4, 0, tzinfo=timezone.utc))
+    add_xp_event(sb, BOB, "workout", 50, datetime(2026, 10, 5, 4, 0, tzinfo=timezone.utc))
+    add_xp_event(sb, BOB, "workout", 50, datetime(2026, 10, 5, 5, 0, tzinfo=timezone.utc))
+
+    svc.list_challenges(sb, ALICE, TODAY)
+    svc.list_challenges(sb, BOB, TODAY)
+
+    assert not [e for e in sb.db["xp_events"] if e["source"] == "challenge"]
+    svc.respond_to_challenge(sb, BOB, challenge["id"], True, TODAY)
+    svc.list_challenges(sb, BOB, TODAY)
+    assert [e["user_id"] for e in sb.db["xp_events"] if e["source"] == "challenge"] == [BOB]
+
+
+def test_challenge_rewards_dont_count_towards_xp_challenges(sb):
+    make_challenge(sb, metric="xp", target=30)
+    add_xp_event(sb, ALICE, "checkin", 30, datetime(2026, 10, 5, 4, 0, tzinfo=timezone.utc))
+
+    svc.list_challenges(sb, ALICE, TODAY)
+    me = svc.list_challenges(sb, ALICE, TODAY)[0]["participants"][0]
+
+    assert me["progress"] == 30
+
+
+def test_profile_names_are_shown_when_set(sb):
+    sb.db["users"] = [{"user_id": BOB, "name": "Bob Tan"}, {"user_id": ALICE, "name": None}]
+    svc.award_xp(sb, ALICE, "meal", 10, str(uuid.uuid4()))
+    svc.award_xp(sb, BOB, "meal", 10, str(uuid.uuid4()))
+    challenge = make_challenge(sb)
+
+    names = {e["userId"]: e["displayName"] for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)}
+    assert names == {ALICE: None, BOB: "Bob Tan"}
+    assert {p["userId"]: p["displayName"] for p in challenge["participants"]} == {ALICE: None, BOB: "Bob Tan"}
+    assert challenge["creatorName"] is None
+
+
+def test_xp_history_endpoint(client):
+    client.post("/gamification/checkins", json=METRICS)
+
+    events = client.get("/gamification/xp-events").json()["events"]
+
+    assert [(e["source"], e["amount"]) for e in events] == [("checkin", 10)]

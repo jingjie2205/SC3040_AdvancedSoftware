@@ -8,6 +8,7 @@ import { CheckInPanel } from "./_components/checkin-panel";
 import { LeaderboardPanel } from "./_components/leaderboard-panel";
 import { StatsPanel } from "./_components/stats-panel";
 import { ErrorBox, Loading } from "./_components/ui";
+import { XpHistoryPanel } from "./_components/xp-history-panel";
 
 export default function LeaderboardPage() {
   const [stats, setStats] = useState<GamificationStats | null>(null);
@@ -78,7 +79,10 @@ export default function LeaderboardPage() {
         <>
           <StatsPanel stats={stats} />
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <CheckInPanel stats={stats} onCheckedIn={handleCheckedIn} />
+            <div className="space-y-6">
+              <CheckInPanel stats={stats} onCheckedIn={handleCheckedIn} />
+              <XpHistoryPanel refreshKey={refreshKey} />
+            </div>
             <div className="lg:col-span-2">
               <LeaderboardPanel refreshKey={refreshKey} />
             </div>

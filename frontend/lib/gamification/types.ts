@@ -30,10 +30,22 @@ export interface CheckInResult {
 export interface LeaderboardEntry {
   position: number;
   userId: string;
+  /** Profile name, or null if the user hasn't set one. */
+  displayName: string | null;
   totalXp: number;
   currentStreak: number;
   rank: string;
   isCurrentUser: boolean;
+}
+
+export type XpSource = "checkin" | "workout" | "meal" | "challenge";
+
+export interface XpEvent {
+  id: string;
+  source: XpSource;
+  amount: number;
+  /** ISO timestamp. */
+  createdAt: string;
 }
 
 export interface Leaderboard {
@@ -49,6 +61,7 @@ export type ParticipantStatus = "invited" | "accepted" | "declined";
 
 export interface ChallengeParticipant {
   userId: string;
+  displayName: string | null;
   status: ParticipantStatus;
   /** Only accepted participants accumulate progress; invitees stay at 0. */
   progress: number;
@@ -59,6 +72,7 @@ export interface ChallengeParticipant {
 export interface Challenge {
   id: string;
   creatorId: string;
+  creatorName: string | null;
   title: string;
   metric: ChallengeMetric;
   targetValue: number;
@@ -67,6 +81,8 @@ export interface Challenge {
   endDate: string;
   status: ChallengeStatus;
   myStatus: ParticipantStatus;
+  /** XP each participant earns once for reaching the target. */
+  rewardXp: number;
   /** Accepted first by progress, then pending invitees; declined invitees are left out. */
   participants: ChallengeParticipant[];
 }

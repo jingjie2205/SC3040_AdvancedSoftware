@@ -16,6 +16,7 @@ import type {
   GamificationStats,
   Leaderboard,
   LeaderboardMetric,
+  XpEvent,
 } from "./types";
 
 export type ApiErrorCode =
@@ -36,6 +37,7 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: ApiError 
 
 export interface GamificationApi {
   getStats(): Promise<GamificationStats>;
+  getXpHistory(): Promise<XpEvent[]>;
   checkIn(input: CheckInInput): Promise<ApiResult<CheckInResult>>;
   getLeaderboard(metric: LeaderboardMetric): Promise<Leaderboard>;
   getChallenges(): Promise<Challenge[]>;

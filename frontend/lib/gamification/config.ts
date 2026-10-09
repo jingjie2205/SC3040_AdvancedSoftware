@@ -12,6 +12,9 @@ export const GAMIFICATION_RULES = {
   challengeTitleMax: 100,
   challengeTargetMax: 100000,
   challengeMaxInvitees: 20,
+  challengeRewardXp: 100,
+  workoutXp: 50,
+  mealXp: 10,
   /** [minimum total XP, rank], ascending. */
   ranks: [
     [0, "Beginner"],

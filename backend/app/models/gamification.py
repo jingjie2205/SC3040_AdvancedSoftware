@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Optional
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -31,6 +31,16 @@ class DailyCheckInResponse(BaseModel):
     totalXp: int
     rank: str
 
+# --- XP history ---
+class XpEvent(BaseModel):
+    id: str
+    source: str
+    amount: int
+    createdAt: datetime
+
+class XpHistoryResponse(BaseModel):
+    events: List[XpEvent]
+
 # --- Leaderboard ---
 class LeaderboardMetric(str, Enum):
     XP = "xp"
@@ -39,6 +49,7 @@ class LeaderboardMetric(str, Enum):
 class LeaderboardEntry(BaseModel):
     position: int
     userId: str
+    displayName: Optional[str] = None
     totalXp: int
     currentStreak: int
     rank: str
@@ -77,6 +88,7 @@ class ChallengeResponseCreate(BaseModel):
 
 class ChallengeParticipant(BaseModel):
     userId: str
+    displayName: Optional[str] = None
     status: str
     progress: int
     completed: bool
@@ -85,6 +97,7 @@ class ChallengeParticipant(BaseModel):
 class Challenge(BaseModel):
     id: str
     creatorId: str
+    creatorName: Optional[str] = None
     title: str
     metric: ChallengeMetric
     targetValue: int
@@ -92,6 +105,7 @@ class Challenge(BaseModel):
     endDate: date
     status: str
     myStatus: str
+    rewardXp: int
     participants: List[ChallengeParticipant]
 
 class ChallengeListResponse(BaseModel):

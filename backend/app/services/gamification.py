@@ -9,7 +9,9 @@ from app.models.gamification import ChallengeMetric, LeaderboardMetric
 # check-in belongs to without needing the tzdata package on Windows/slim images.
 APP_TZ = timezone(timedelta(hours=8))
 
-XP_REWARDS = {"checkin": 10, "workout": 50, "meal": 10}
+# workout and meal amounts are also hard-coded in the gamification_xp_sources migration's trigger
+XP_REWARDS = {"checkin": 10, "workout": 50, "meal": 10, "challenge": 100}
+XP_HISTORY_LIMIT = 20
 STREAK_BONUS_PER_DAY = 2
 STREAK_BONUS_CAP_DAYS = 7
 
@@ -105,28 +107,15 @@ def award_xp(
 ) -> int:
     """Records an XP award and returns the user's new total.
 
-    Awarding the same (source, source_id) twice is a no-op, so callers can retry safely.
-    Used by other features, e.g. award_xp(sb, uid, "workout", XP_REWARDS["workout"], session_id).
+    Awarding the same (user, source, source_id) twice is a no-op, so callers can retry safely.
+    Workouts and meals are awarded by database triggers (see the gamification_xp_sources
+    migration), so their features don't need to call this.
     """
-    try:
-        supabase.table("xp_events").insert(
-            {"user_id": user_id, "source": source, "source_id": source_id, "amount": amount}
-        ).execute()
-    except APIError as e:
-        if e.code != PG_UNIQUE_VIOLATION:
-            raise
-        row = _get_stats_row(supabase, user_id)
-        return row["total_xp"] if row else 0
-
-    # Read-modify-write is not atomic; two simultaneous awards for one user could lose an
-    # increment. Acceptable for the prototype; move into a SQL function if that changes.
-    row = _get_stats_row(supabase, user_id)
-    new_total = (row["total_xp"] if row else 0) + amount
-    supabase.table("gamification_user_stats").upsert(
-        {"user_id": user_id, "total_xp": new_total, "updated_at": datetime.now(timezone.utc).isoformat()},
-        on_conflict="user_id",
+    res = supabase.rpc(
+        "award_gamification_xp",
+        {"p_user_id": user_id, "p_source": source, "p_source_id": source_id, "p_amount": amount},
     ).execute()
-    return new_total
+    return res.data
 
 
 def perform_checkin(supabase: Client, user_id: str, metrics: dict, today: date) -> dict:
@@ -178,6 +167,26 @@ def perform_checkin(supabase: Client, user_id: str, metrics: dict, today: date) 
     }
 
 
+def get_xp_history(supabase: Client, user_id: str, limit: int = XP_HISTORY_LIMIT) -> list:
+    rows = (
+        supabase.table("xp_events").select("id,source,amount,created_at").eq("user_id", user_id)
+        .order("created_at", desc=True).limit(limit).execute().data or []
+    )
+    return [
+        {"id": r["id"], "source": r["source"], "amount": r["amount"], "createdAt": r["created_at"]}
+        for r in rows
+    ]
+
+
+def _display_names(supabase: Client, user_ids: Iterable[str]) -> dict:
+    """Profile names from the team's users table; users without a profile or name are left out."""
+    ids = list(set(user_ids))
+    if not ids:
+        return {}
+    rows = supabase.table("users").select("user_id,name").in_("user_id", ids).execute().data or []
+    return {row["user_id"]: row["name"] for row in rows if row.get("name")}
+
+
 def get_leaderboard(
     supabase: Client, user_id: str, metric: LeaderboardMetric, limit: int, today: date
 ) -> list:
@@ -192,11 +201,13 @@ def get_leaderboard(
     else:
         query = query.order("total_xp", desc=True)
     rows = query.limit(limit).execute().data or []
+    names = _display_names(supabase, [row["user_id"] for row in rows])
 
     return [
         {
             "position": position,
             "userId": row["user_id"],
+            "displayName": names.get(row["user_id"]),
             "totalXp": row["total_xp"],
             "currentStreak": effective_streak(
                 _parse_date(row.get("last_check_in_date")), row["current_streak"], today
@@ -257,6 +268,9 @@ def _progress_by_user(supabase: Client, challenge: dict, user_ids: list) -> dict
     )
     if metric == ChallengeMetric.SESSIONS:
         query = query.eq("source", "workout")
+    else:
+        # Challenge rewards don't count towards XP challenges, or finishing one would feed others.
+        query = query.neq("source", "challenge")
     for row in query.execute().data or []:
         progress[row["user_id"]] += row["amount"] if metric == ChallengeMetric.XP else 1
     return progress
@@ -271,9 +285,11 @@ def _build_challenge(
         supabase, challenge, [p["user_id"] for p in visible if p["status"] == "accepted"]
     )
     target = challenge["target_value"]
+    names = _display_names(supabase, [p["user_id"] for p in visible] + [challenge["creator_id"]])
     entries = [
         {
             "userId": p["user_id"],
+            "displayName": names.get(p["user_id"]),
             "status": p["status"],
             "progress": progress.get(p["user_id"], 0),
             "completed": progress.get(p["user_id"], 0) >= target,
@@ -286,6 +302,7 @@ def _build_challenge(
     return {
         "id": challenge["id"],
         "creatorId": challenge["creator_id"],
+        "creatorName": names.get(challenge["creator_id"]),
         "title": challenge["title"],
         "metric": challenge["metric"],
         "targetValue": target,
@@ -293,12 +310,17 @@ def _build_challenge(
         "endDate": end,
         "status": challenge_status(start, end, today),
         "myStatus": next(p["status"] for p in participants if p["user_id"] == user_id),
+        "rewardXp": XP_REWARDS["challenge"],
         "participants": entries,
     }
 
 
 def list_challenges(supabase: Client, user_id: str, today: date) -> list:
-    """Challenges the user created, joined or is invited to; declined ones are left out."""
+    """Challenges the user created, joined or is invited to; declined ones are left out.
+
+    Also pays the user's reward for any challenge they have completed. Rewards are paid when the
+    user next views their challenges, and award_xp makes repeat views a no-op.
+    """
     mine = (
         supabase.table("challenge_participants").select("challenge_id").eq("user_id", user_id)
         .neq("status", "declined").execute().data or []
@@ -316,7 +338,13 @@ def list_challenges(supabase: Client, user_id: str, today: date) -> list:
         .in_("challenge_id", ids).execute().data or []
     ):
         participants[row["challenge_id"]].append(row)
-    return [_build_challenge(supabase, c, participants[c["id"]], user_id, today) for c in challenges]
+
+    built = [_build_challenge(supabase, c, participants[c["id"]], user_id, today) for c in challenges]
+    for challenge in built:
+        me = next((p for p in challenge["participants"] if p["isCurrentUser"]), None)
+        if me and me["status"] == "accepted" and me["completed"]:
+            award_xp(supabase, user_id, "challenge", XP_REWARDS["challenge"], challenge["id"])
+    return built
 
 
 def create_challenge(supabase: Client, user_id: str, data: dict, today: date) -> dict:
