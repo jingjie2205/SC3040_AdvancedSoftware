@@ -208,10 +208,14 @@ def test_an_empty_change_set_has_the_expected_empty_shape():
 # ------------------------------------------------------------------ configuration
 
 
-def test_the_repository_is_built_on_the_shared_supabase_admin_client(monkeypatch):
-    client = object()
+def test_the_repository_is_built_on_the_apps_supabase_admin_client(monkeypatch):
+    class Client:
+        marker = "the admin client"
+
+    client = Client()
     monkeypatch.setattr(repository, "get_supabase_admin", lambda: client)
-    assert repository.create_repository().db is client
+    # Each worker thread gets its own copy of that client (test_training_client.py), but it is that client.
+    assert repository.create_repository().db.marker == "the admin client"
 
 
 # ------------------------------------------------------------------ profile

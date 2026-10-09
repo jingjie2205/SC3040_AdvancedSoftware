@@ -167,7 +167,9 @@ harness isn't part of the repo.
   has passed is dropped on save). `days_until_next_exam` takes the nearest one that hasn't passed. Inside
   `exam_window_days` of it the score drops, up to `exam_max_penalty`, and the "Academic load" factor says
   how many days are left. If Settings ever ships an exam date, read it where
-  `TrainingService._readiness` reads `preferences.exam_dates`.
+  `TrainingService._readiness` reads `preferences.exam_dates`. Until the migration that adds the column
+  (`20261007120000_training_inputs.sql`) is applied, saving a date is refused with a 503 that says so, rather
+  than saving the form and quietly losing the date; a form with no dates still saves.
 - **Sleep is entered on the Today card, once a day.** Nothing else records it. It is stored per user and
   day in `training_sleep_logs` and only the entry for the day being scored counts. It is the
   `sleep_hours` feature, and it wins over a check-in's own sleep answer if one ever carries one.
@@ -179,6 +181,11 @@ harness isn't part of the repo.
   the leaderboard's tables aren't on the database yet one warning is logged and nothing is awarded. The helper
   is imported inside the method, so the training routes still load if the gamification module has a problem
   (`test_training_xp.py`).
+- **Each worker thread has its own Supabase client** (`repository.ThreadLocalClient`). Requests run on a thread
+  pool, and one client's HTTP/2 connection shared between its threads failed under concurrent requests: against
+  the live project about one call in six raised `ReadError` (WinError 10035 on Windows), and `GET /today`
+  returned 500 when the page loaded two endpoints at once. The client is opened lazily, once per thread
+  (`test_training_client.py`).
 
 ## The Home summary and the coach
 
