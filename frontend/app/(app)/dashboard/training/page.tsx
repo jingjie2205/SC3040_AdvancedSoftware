@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CalendarDays, ClipboardList, Info, Sparkles, SlidersHorizontal } from "lucide-react";
+import { Activity, CalendarDays, ClipboardList, Info, Sparkles, SlidersHorizontal } from "lucide-react";
 import { trainingApi } from "@/lib/training/api";
 import { formatDay } from "@/lib/training/dates";
 import type { PlanAdaptation, TrainingPlan, TrainingPreferences } from "@/lib/training/types";
 import { PlanPanel } from "./_components/plan-panel";
 import { PreferencesForm } from "./_components/preferences-form";
 import { SchedulePanel } from "./_components/schedule-panel";
+import { StravaPanel } from "./_components/strava-panel";
 import { TodayPanel } from "./_components/today-panel";
 import { ErrorBox, Loading, Segmented, btnSecondary } from "./_components/ui";
 
@@ -15,13 +16,14 @@ import { ErrorBox, Loading, Segmented, btnSecondary } from "./_components/ui";
 /* Tabs                                                                */
 /* ------------------------------------------------------------------ */
 
-type Tab = "today" | "schedule" | "plan" | "preferences";
+type Tab = "today" | "schedule" | "plan" | "preferences" | "strava";
 
 const TABS = [
   { value: "today", label: "Today", icon: Sparkles },
   { value: "schedule", label: "Schedule", icon: CalendarDays },
   { value: "plan", label: "Plan", icon: ClipboardList },
   { value: "preferences", label: "Preferences", icon: SlidersHorizontal },
+  { value: "strava", label: "Strava", icon: Activity },
 ] as const;
 
 const TRIGGER_LABEL: Record<PlanAdaptation["trigger"], string> = {
@@ -71,6 +73,22 @@ export default function TrainingPage() {
     setNotice(message);
     noticeTimer.current = setTimeout(() => setNotice(null), 4500);
   }, []);
+
+  // Strava's consent page sends the athlete back here (through /api/auth/callback) with the outcome in the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get("strava");
+    if (!outcome) return;
+    setTab("strava");
+    showNotice(
+      outcome === "connected"
+        ? "Strava connected"
+        : params.get("reason") === "access_denied"
+          ? "Strava access wasn't granted"
+          : "Couldn't connect Strava. Try again.",
+    );
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [showNotice]);
 
   async function acknowledgeAdaptation() {
     try {
@@ -173,6 +191,7 @@ export default function TrainingPage() {
               }}
             />
           )}
+          {tab === "strava" && <StravaPanel />}
         </>
       )}
     </div>

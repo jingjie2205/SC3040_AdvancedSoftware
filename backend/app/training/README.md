@@ -125,7 +125,7 @@ harness isn't part of the repo.
 
 | Rule | Where | Test |
 |---|---|---|
-| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities`. The coach's week minutes go through `modelling_workouts` too | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model), `test_training_coach.py` and `test_training_summary.py` (a Strava row can't reach the prompt or the totals) |
+| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities`. The coach's week minutes go through `modelling_workouts` too. The page's Strava tab shows activities fetched live and passes them nowhere: the training backend imports no Strava code, and the tab's modules and the training API client never import each other | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model), `test_training_coach.py` and `test_training_summary.py` (a Strava row can't reach the prompt or the totals), `test_training_strava_isolation.py` (the imports) |
 | 2. Reconciliation is one-directional | `rules.reconcile` | `test_training_rules.py` (all nine band pairs) |
 | 3. Rebaseline on completed sessions | `planner.baseline_from_history` reads logged workouts only | `test_training_planner.py` |
 | 4. Readiness is private | Only the owner's own `GET /today` and `GET /summary`, and the stateless `/readiness/score`, can return it; selects are scoped to the user. The sleep entries and exam dates that feed it are held to the same rule: only the owner's own `GET /today` and `GET /preferences` return them. Nothing that feeds or comes from the score is ever given to Gemini: the coach's facts are built from the plan only, and readiness isn't even computed on its path | `test_training_api.py` walks the OpenAPI schema (exactly three operations carry readiness, and the coach isn't one); `test_training_repository.py`; `test_training_inputs.py`; `test_training_coach.py` (the exact prompt, forbidden words, an exploding scorer, an import guard) |
@@ -234,6 +234,27 @@ data, free text from the user, or any id, email or name. Adding to that list mea
   const note = await trainingApi.getCoachMessage();      // ApiResult<CoachMessage>
   ```
   Without the flag the same calls return fixtures, so the Home card can be built before the backend is running.
+
+## The Strava tab
+
+The training page's **Strava** tab shows the athlete's ten latest Strava activities (name, type, day and time,
+distance, moving time, pace for runs and walks, average heart rate, climb), each with a "View on Strava" link.
+It is for reference only (Hard Rule 1): the list is fetched live through the existing `GET /strava/activities`
+route when the tab opens and on Refresh, kept in the tab's own state, and never saved, sent to the training API,
+or used by readiness, the plan or the coach.
+
+- **Not connected:** the tab shows "Connect Strava", a link to Strava's consent page built from
+  `NEXT_PUBLIC_STRAVA_CLIENT_ID` and `NEXT_PUBLIC_STRAVA_REDIRECT_URI`, with `state=training`. Once the athlete
+  allows it, Strava sends them to `frontend/app/api/auth/callback/route.ts`, which swaps the code for tokens
+  through `POST /strava/exchange` (stored on the user's row) and returns to the tab with a notice. With no
+  `state` it returns to Settings, as it always did. That route had been deleted from `main`; it is back.
+- **Connected:** the backend refreshes an expired access token itself (`check_valid_strava_token`). If Strava
+  refuses (rate limit, revoked access, outage) the backend answers 500, and the tab says so and offers Try again.
+  Disconnecting stays in Settings.
+- **Where the code is:** `lib/training/strava.ts` (the request and the connect link), `lib/training/strava-format.ts`
+  (plain functions that read and format the list) and `_components/strava-panel.tsx`. They import only a short,
+  fixed list, and `test_training_strava_isolation.py` fails if that changes.
+- Like the rest of the page's live data, the tab needs `NEXT_PUBLIC_TRAINING_API=http` and a signed-in user.
 
 ## Not built yet, and who it depends on
 

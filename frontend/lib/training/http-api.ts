@@ -80,7 +80,7 @@ function sendToSignIn() {
   }
 }
 
-async function buildHeaders(): Promise<Record<string, string>> {
+export async function buildHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "X-Client-Date": todayISO(),
