@@ -15,6 +15,7 @@ class ActivityLevel(str, Enum):
     EXTRA_ACTIVE = "EXTRA_ACTIVE"
 
 class UserBase(BaseModel):
+    name: Optional[str] = None
     email: EmailStr
     age: Optional[int] = None
     weight: Optional[float] = None

@@ -272,15 +272,15 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 px-4 py-8 sm:px-8">
-      <div className="mx-auto max-w-6xl space-y-8">
+    <div className="min-h-screen bg-slate-950">
+      <div className="mx-auto max-w-6xl space-y-8 px-4 sm:px-8">
         {/* Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
               Today
             </h1>
-            <p className="mt-1 text-sm text-slate-400">
+            <p className="text-sm text-slate-400">
               Your health, training and nutrition, all in one place.
             </p>
           </div>

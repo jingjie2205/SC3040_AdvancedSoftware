@@ -23,6 +23,7 @@ async def get_my_profile(
         
     data = response.data
     return {
+        "name": data.get("name"),
         "email": data["email"],
         "age": data.get("age"),
         "weight": data.get("weight"),
