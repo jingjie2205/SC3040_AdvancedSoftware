@@ -58,15 +58,15 @@ def get_daily_log(
         ) from exc
 
 
-@router.get("/batch_daily")
-def get_batch_daily_log(
+@router.get("/batch_calories")
+def get_batch_calories(
     start_date: date,
     end_date: date,
     offset_minutes: int = Query(default=0, ge=-720, le=840),
     user_id: str = Depends(get_current_user_id),
 ):
     try:
-        return nutrition.batch_daily_log(
+        return nutrition.fetch_batch_calories(
             get_supabase_admin(), user_id, start_date, end_date, offset_minutes
         )
     except (APIError, httpx.RequestError) as exc:
