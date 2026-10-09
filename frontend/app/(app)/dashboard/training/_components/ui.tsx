@@ -45,8 +45,14 @@ export const btnDanger =
 export const btnHero =
   "flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2.5 text-xs font-bold text-black shadow-lg shadow-emerald-500/20 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50";
 
-export const inputClass =
-  "mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500";
+const inputBase =
+  "rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500";
+
+/** A full-width field under its label. */
+export const inputClass = `mt-1 w-full ${inputBase}`;
+
+/** The same field with no width or margin of its own, for inputs that sit in a row beside a button. */
+export const inputInlineClass = inputBase;
 
 /* ------------------------------------------------------------------ */
 /* Labels and per-value presentation                                   */

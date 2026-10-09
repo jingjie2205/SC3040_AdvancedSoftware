@@ -105,11 +105,11 @@ def scoped_to_user(query) -> bool:
 
 @pytest.mark.parametrize("call,table", [
     (lambda r: r.get_preferences(USER_A), "training_preferences"),
-    (lambda r: r.get_active_plan(USER_A), "training_plans"),
+    (lambda r: r.get_active_plan(USER_A), "training_routine_plans"),
     (lambda r: r.list_sessions(USER_A, DAY, DAY), "planned_sessions"),
     (lambda r: r.get_session(USER_A, "s1"), "planned_sessions"),
-    (lambda r: r.list_workouts(USER_A, DAY, DAY), "workout_sessions"),
-    (lambda r: r.get_workout_for_session(USER_A, "s1"), "workout_sessions"),
+    (lambda r: r.list_workouts(USER_A, DAY, DAY), "training_workout_logs"),
+    (lambda r: r.get_workout_for_session(USER_A, "s1"), "training_workout_logs"),
     (lambda r: r.get_cached_readiness(USER_A, DAY), "readiness_scores"),
     (lambda r: r.list_readiness(USER_A, DAY, DAY), "readiness_scores"),
 ])
@@ -150,8 +150,8 @@ def test_single_row_writes_carry_the_users_id():
 
 def test_rows_as_postgres_returns_them_become_models():
     repo, _ = repo_with({
-        "planned_sessions": [SESSION_ROW], "workout_sessions": [WORKOUT_ROW],
-        "training_plans": [PLAN_ROW], "training_preferences": [PREFS_ROW], "readiness_scores": [READINESS_ROW],
+        "planned_sessions": [SESSION_ROW], "training_workout_logs": [WORKOUT_ROW],
+        "training_routine_plans": [PLAN_ROW], "training_preferences": [PREFS_ROW], "readiness_scores": [READINESS_ROW],
     })
     session = repo.list_sessions(USER_A, DAY, DAY)[0]
     assert (session.id, session.target_volume, session.intensity_band) == ("s1", 32, "push")
@@ -168,12 +168,6 @@ def test_missing_rows_come_back_as_none_or_empty():
     assert repo.get_preferences(USER_A) is None and repo.get_active_plan(USER_A) is None
     assert repo.get_session(USER_A, "x") is None and repo.get_cached_readiness(USER_A, DAY) is None
     assert repo.list_sessions(USER_A, DAY, DAY) == []
-
-
-def test_no_check_in_source_exists_yet():
-    repo, client = repo_with()
-    assert repo.get_latest_checkin(USER_A, DAY) is None
-    assert client.queries == []  # it doesn't guess at a table that isn't there
 
 
 # ------------------------------------------------------------------ one transaction, no user id in the rows
@@ -223,13 +217,13 @@ def test_the_repository_is_built_on_the_shared_supabase_admin_client(monkeypatch
 # ------------------------------------------------------------------ profile
 
 
-def test_the_profile_read_asks_for_one_column_scoped_to_the_user():
-    repo, client = repo_with({"users": [{"activity_level": "VERY_ACTIVE"}]})
-    assert repo.get_profile(USER_A) == AthleteProfile(activity_level="VERY_ACTIVE")
+def test_the_profile_read_asks_for_the_two_columns_it_uses_scoped_to_the_user():
+    repo, client = repo_with({"users": [{"activity_level": "VERY_ACTIVE", "fitness_goal": "SURPLUS"}]})
+    assert repo.get_profile(USER_A) == AthleteProfile(activity_level="VERY_ACTIVE", fitness_goal="SURPLUS")
     query = client.queries[-1]
     assert query.table_name == "users"
-    # The same table holds Strava tokens, so this must never become select("*").
-    assert query.selected == ("activity_level",)
+    # The same table holds Strava tokens and a password hash, so this must never become select("*").
+    assert query.selected == ("activity_level,fitness_goal",)
     assert ("eq", "user_id", USER_A) in query.filters
 
 

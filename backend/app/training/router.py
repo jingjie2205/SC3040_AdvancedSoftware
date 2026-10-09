@@ -21,6 +21,8 @@ from .models import (
     Schedule,
     ScoreResult,
     SessionResponseRequest,
+    SleepEntry,
+    SleepInput,
     TodayView,
     TrainingPlan,
     TrainingPreferences,
@@ -61,8 +63,8 @@ def get_preferences(user_id: UserId, service: Service):
 
 
 @router.put("/preferences", response_model=TrainingPreferences)
-def put_preferences(body: TrainingPreferencesInput, user_id: UserId, service: Service):
-    return service.save_preferences(user_id, body)
+def put_preferences(body: TrainingPreferencesInput, user_id: UserId, today: Today, service: Service):
+    return service.save_preferences(user_id, today, body)
 
 
 # --------------------------------------------------------------------------- plan
@@ -121,6 +123,18 @@ def remove_session(session_id: UUID, user_id: UserId, today: Today, service: Ser
 @router.get("/today", response_model=TodayView)
 def get_today(user_id: UserId, today: Today, service: Service):
     return service.get_today(user_id, today)
+
+
+@router.put("/sleep", response_model=SleepEntry)
+def put_sleep(body: SleepInput, user_id: UserId, today: Today, service: Service):
+    """Last night's sleep, filed under the user's today. It feeds today's readiness score."""
+    return service.log_sleep(user_id, today, body)
+
+
+@router.delete("/sleep", status_code=204)
+def delete_sleep(user_id: UserId, today: Today, service: Service):
+    service.clear_sleep(user_id, today)
+    return Response(status_code=204)
 
 
 @router.post("/sessions/{session_id}/respond", response_model=PlannedSession)

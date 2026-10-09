@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, timedelta
 from statistics import mean
-from typing import List, Optional, Protocol, Sequence
+from typing import Iterable, List, Optional, Protocol, Sequence
 
 from pydantic import Field
 
@@ -32,10 +32,15 @@ class ActivityRecord:
 
 @dataclass(frozen=True)
 class Checkin:
-    """Latest daily check-in. `load_rating` is perceived load/fatigue, 1 (light) to 5 (exhausting)."""
+    """
+    Latest daily check-in. `load_rating` is the check-in's muscle soreness answer, 1 ("Fresh") to 5
+    ("Very sore"), so a higher number is worse. `day` is the date it was made; when the source
+    doesn't say, the check-in is taken as current.
+    """
 
     load_rating: Optional[int]
     sleep_hours: Optional[float]
+    day: Optional[date] = None
 
 
 class ReadinessFeatures(ApiModel):
@@ -48,19 +53,39 @@ class ReadinessFeatures(ApiModel):
     days_until_exam: Optional[int] = Field(default=None, ge=0, le=365)
 
 
+# What `ReadinessFeatures.days_until_exam` accepts. An exam further off than the scorer's window
+# changes nothing, so capping it loses no information.
+_MAX_EXAM_DAYS = 365
+
+
+def days_until_next_exam(exam_dates: Iterable[date], today: date) -> Optional[int]:
+    """Days from `today` to the nearest exam that hasn't passed (0 if it is today), or None."""
+    upcoming = [(d - today).days for d in exam_dates if d >= today]
+    if not upcoming:
+        return None
+    return min(min(upcoming), _MAX_EXAM_DAYS)
+
+
 def build_features(
     records: Sequence[ActivityRecord],
     checkin: Optional[Checkin],
     as_of: date,
     days_until_exam: Optional[int] = None,
     rules: ReadinessRules = READINESS_RULES,
+    sleep_hours: Optional[float] = None,
 ) -> ReadinessFeatures:
     """
     Turn history into features for the score on `as_of`, using days before `as_of` only.
 
+    `sleep_hours` is last night's sleep as the user entered it today. A check-in that carries its own
+    sleep answer is only the fallback, so an explicit entry always wins.
+
     Hard Rule 1: Strava-sourced records are dropped here, before anything is computed, so they
     can't influence a score however they got into `records`.
     """
+    if checkin is not None and checkin.day is not None and (as_of - checkin.day).days > rules.checkin_max_age_days:
+        checkin = None  # too old to say anything about today
+
     usable = [r for r in records if r.source != "strava"]
     acute_start = as_of - timedelta(days=7)
     chronic_start = as_of - timedelta(days=28)
@@ -79,11 +104,14 @@ def build_features(
     if len(recent_hr) >= rules.hr_trend_min_sessions and len(prior_hr) >= rules.hr_trend_min_sessions:
         hr_trend = round(mean(recent_hr) - mean(prior_hr), 2)
 
+    if sleep_hours is None and checkin is not None:
+        sleep_hours = checkin.sleep_hours
+
     return ReadinessFeatures(
         acwr=acwr,
         hr_trend_delta=hr_trend,
         checkin_load_rating=checkin.load_rating if checkin else None,
-        sleep_hours=checkin.sleep_hours if checkin else None,
+        sleep_hours=sleep_hours,
         days_until_exam=days_until_exam,
     )
 
@@ -247,7 +275,7 @@ class RuleBasedScorer:
                 key="checkin",
                 label="Daily check-in",
                 impact=impact_for(delta),
-                detail=f"Felt {rating} out of 5 on load",
+                detail=f"Muscle soreness {rating} out of 5",
             ),
         )
 

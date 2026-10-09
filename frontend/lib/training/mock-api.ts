@@ -19,14 +19,17 @@ import {
   fieldErrorsFrom,
   generatePlanSchema,
   logWorkoutSchema,
+  sleepSchema,
   trainingPreferencesSchema,
 } from "./schemas";
 import type { LogWorkoutInput, TrainingPreferencesInput } from "./schemas";
 import type { ApiError, ApiResult, LogResult, TrainingApi } from "./api";
 import type {
+  Goal,
   IntensityBand,
   ModelInfo,
   PlannedSession,
+  ReadinessFactor,
   ReadinessScore,
   SessionRecommendation,
   TodayView,
@@ -43,6 +46,7 @@ const SEED_PREFERENCES: TrainingPreferencesInput = {
   sessionDurationMin: 45,
   activityTypes: ["run", "gym", "cycling"],
   restDays: ["tue", "thu", "sun"],
+  examDates: [],
 };
 
 const RANK: Record<IntensityBand, number> = { deload: 0, light: 1, push: 2 };
@@ -52,6 +56,8 @@ interface MockState {
   plan: TrainingPlan | null;
   sessions: PlannedSession[];
   workouts: WorkoutSession[];
+  /** Last night's sleep as entered today. */
+  sleepHours: number | null;
 }
 
 let state: MockState | null = null;
@@ -66,6 +72,17 @@ const fail = (
   message: string,
   extra: Partial<ApiError> = {},
 ): ApiResult<never> => ({ ok: false, error: { code, message, ...extra } });
+
+/**
+ * The profile goal the fixtures pretend Settings holds. Open the page with `?goal=lose_weight`,
+ * `?goal=build_muscle` or `?goal=none` to see the plan follow it. Maintenance is the default.
+ */
+function mockGoal(): Goal | null {
+  const asked =
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("goal") : null;
+  if (asked === "none") return null;
+  return asked === "lose_weight" || asked === "build_muscle" || asked === "maintain" ? asked : "maintain";
+}
 
 function makeWorkout(fields: Omit<WorkoutSession, "id" | "createdAt">): WorkoutSession {
   return { id: nextId("w"), createdAt: new Date().toISOString(), ...fields };
@@ -103,7 +120,13 @@ function seedState(scenario: "active" | "new"): MockState {
   const today = todayISO();
   const thisMonday = startOfWeek(today);
   if (scenario === "new") {
-    return { preferences: null, plan: null, sessions: [], workouts: seedHistory(thisMonday) };
+    return {
+      preferences: null,
+      plan: null,
+      sessions: [],
+      workouts: seedHistory(thisMonday),
+      sleepHours: null,
+    };
   }
 
   const planStart = addDays(thisMonday, -14);
@@ -119,6 +142,7 @@ function seedState(scenario: "active" | "new"): MockState {
     baselineVolume: baseline.volume,
     createdAt: new Date().toISOString(),
     notice: PLAN_NOTICE,
+    goal: mockGoal(),
     lastAdaptation: null,
   };
 
@@ -128,6 +152,7 @@ function seedState(scenario: "active" | "new"): MockState {
     startDate: planStart,
     targets: weeklyTargets(baseline.volume, weeks),
     fromDate: planStart,
+    goal: plan.goal,
   });
   const sessions = drafts.map((draft): PlannedSession => {
     const session: PlannedSession = { ...draft, id: nextId("s"), planId: plan.id };
@@ -157,6 +182,7 @@ function seedState(scenario: "active" | "new"): MockState {
     plan,
     sessions,
     workouts,
+    sleepHours: null,
   };
 }
 
@@ -189,7 +215,7 @@ function readinessFixture(date: string, plannedBand: IntensityBand | null): Read
         { key: "load", label: "Training load", impact: "positive", detail: "Acute:chronic ratio 1.05, right in the productive range" },
         { key: "sleep", label: "Sleep", impact: "positive", detail: "8.1 h last night" },
         { key: "rhr", label: "Resting heart rate", impact: "positive", detail: "1 bpm below your 14-day baseline" },
-        { key: "checkin", label: "Daily check-in", impact: "neutral", detail: "Felt 4 out of 5" },
+        { key: "checkin", label: "Daily check-in", impact: "neutral", detail: "Muscle soreness 4 out of 5" },
       ],
     };
   }
@@ -203,9 +229,81 @@ function readinessFixture(date: string, plannedBand: IntensityBand | null): Read
       { key: "load", label: "Training load", impact: "negative", detail: "Acute:chronic ratio 1.32, above your usual range" },
       { key: "sleep", label: "Sleep", impact: "negative", detail: "5.9 h last night" },
       { key: "rhr", label: "Resting heart rate", impact: "neutral", detail: "2 bpm above your 14-day baseline" },
-      { key: "checkin", label: "Daily check-in", impact: "positive", detail: "Felt 4 out of 5" },
+      { key: "checkin", label: "Daily check-in", impact: "positive", detail: "Muscle soreness 4 out of 5" },
     ],
   };
+}
+
+const FIXTURE_SLEEP_HOURS = { push: 8.1, other: 5.9 };
+
+/** The same rules as the backend's rule scorer, so the fixtures move the way the real score does. */
+const sleepDelta = (hours: number) =>
+  hours < 7 ? -Math.min(15, (7 - hours) * 7.5) : hours >= 8 ? 3 : 0;
+const examDelta = (days: number) => (days > 7 ? 0 : -((7 - days) / 7) * 10);
+const impactOf = (delta: number): ReadinessFactor["impact"] =>
+  delta <= -1 ? "negative" : delta >= 1 ? "positive" : "neutral";
+
+/**
+ * The fixture's readiness, with its made-up sleep taken out and the user's own sleep and nearest
+ * exam put in, so entering them visibly changes the score, the band and the factors.
+ */
+function readinessFor(
+  date: string,
+  plannedBand: IntensityBand | null,
+  sleepHours: number | null,
+  examDates: string[],
+): ReadinessScore {
+  const base = readinessFixture(date, plannedBand);
+  const fixtureSleep =
+    base.classification === "push" ? FIXTURE_SLEEP_HOURS.push : FIXTURE_SLEEP_HOURS.other;
+  let score = base.score - sleepDelta(fixtureSleep);
+  const factors = base.factors.filter((factor) => factor.key !== "sleep");
+  const drags: { label: string; delta: number }[] = factors
+    .filter((factor) => factor.impact === "negative")
+    .map((factor) => ({ label: factor.label, delta: -1 }));
+
+  if (sleepHours !== null) {
+    const delta = sleepDelta(sleepHours);
+    score += delta;
+    factors.push({
+      key: "sleep",
+      label: "Sleep",
+      impact: impactOf(delta),
+      detail: `${sleepHours.toFixed(1)} h last night`,
+    });
+    if (delta <= -1) drags.push({ label: "Sleep", delta });
+  }
+  const nextExam = examDates.filter((day) => day >= date).sort()[0];
+  if (nextExam !== undefined && diffDays(nextExam, date) <= 7) {
+    const days = diffDays(nextExam, date);
+    const delta = examDelta(days);
+    score += delta;
+    factors.push({
+      key: "exam",
+      label: "Academic load",
+      impact: impactOf(delta),
+      detail: days === 0 ? "Exam today" : `Exam in ${days} day${days === 1 ? "" : "s"}`,
+    });
+    if (delta <= -1) drags.push({ label: "Academic load", delta });
+  }
+
+  const finalScore = Math.max(0, Math.min(100, Math.round(score)));
+  const classification: IntensityBand =
+    finalScore >= 70 ? "push" : finalScore >= 45 ? "light" : "deload";
+  const drag = drags.sort((a, b) => a.delta - b.delta)[0];
+  const explanation =
+    classification === "deload"
+      ? `Fatigue signals are stacking up, mainly ${(drag?.label ?? "several signals").toLowerCase()}. Prioritise recovery today.`
+      : classification === "light"
+        ? `${drag?.label ?? "Your recent signals"} is holding your score back, so keep it easier today.`
+        : drag
+          ? `Mostly recovered. Keep an eye on ${drag.label.toLowerCase()}.`
+          : "Well recovered. Nothing is holding your score back today.";
+
+  // The real scorer lists the biggest movers first and shows four, so a drag never hides below the fold.
+  const rank = { negative: 0, positive: 1, neutral: 2 } as const;
+  factors.sort((a, b) => rank[a.impact] - rank[b.impact]);
+  return { ...base, score: finalScore, classification, explanation, factors: factors.slice(0, 4) };
 }
 
 /** One-directional: readiness can pull a session down a band, never up. */
@@ -272,7 +370,10 @@ export const mockTrainingApi: TrainingApi = {
       });
     }
     const s = getState();
-    s.preferences = { ...parsed.data, updatedAt: new Date().toISOString() };
+    // Like the server: kept in order without repeats, and an exam that has passed is dropped.
+    const today = todayISO();
+    const examDates = [...new Set(parsed.data.examDates)].filter((day) => day >= today).sort();
+    s.preferences = { ...parsed.data, examDates, updatedAt: new Date().toISOString() };
     return ok(s.preferences);
   },
 
@@ -318,6 +419,7 @@ export const mockTrainingApi: TrainingApi = {
       baselineVolume: baseline.volume,
       createdAt: new Date().toISOString(),
       notice: PLAN_NOTICE,
+      goal: mockGoal(),
       lastAdaptation: null,
     };
     // Only sessions still to do are dropped; anything already completed, partial or missed is history.
@@ -329,7 +431,7 @@ export const mockTrainingApi: TrainingApi = {
     }
     const taken = new Set(s.sessions.map((x) => x.date));
     s.sessions.push(
-      ...buildSessions({ prefs: s.preferences, startDate, targets, fromDate: today })
+      ...buildSessions({ prefs: s.preferences, startDate, targets, fromDate: today, goal: plan.goal })
         .filter((draft) => !taken.has(draft.date))
         .map((draft): PlannedSession => ({ ...draft, id: nextId("s"), planId: plan.id })),
     );
@@ -359,13 +461,14 @@ export const mockTrainingApi: TrainingApi = {
     );
     const taken = new Set(s.sessions.filter((x) => x.planId === plan.id).map((x) => x.date));
     s.sessions.push(
-      ...buildSessions({ prefs: s.preferences, startDate: monday, targets, fromDate: today })
+      ...buildSessions({ prefs: s.preferences, startDate: monday, targets, fromDate: today, goal: mockGoal() })
         .filter((draft) => !taken.has(draft.date))
         .map((draft): PlannedSession => ({ ...draft, id: nextId("s"), planId: plan.id })),
     );
 
     const previousBaseline = plan.baselineVolume;
     plan.baselineVolume = baseline.volume;
+    plan.goal = mockGoal();
     plan.lastAdaptation = {
       trigger: "manual",
       adaptedAt: new Date().toISOString(),
@@ -445,13 +548,19 @@ export const mockTrainingApi: TrainingApi = {
     const planned = plan
       ? (s.sessions.find((x) => x.planId === plan.id && x.date === today) ?? null)
       : null;
-    const readiness = readinessFixture(today, planned?.intensityBand ?? null);
+    const readiness = readinessFor(
+      today,
+      planned?.intensityBand ?? null,
+      s.sleepHours,
+      s.preferences?.examDates ?? [],
+    );
     const view: TodayView = {
       date: today,
       readiness,
       planned,
       recommendation: planned ? reconcile(planned, readiness) : null,
       logged: planned ? (s.workouts.find((w) => w.plannedSessionId === planned.id) ?? null) : null,
+      sleepHours: s.sleepHours,
     };
     return clone(view);
   },
@@ -502,6 +611,25 @@ export const mockTrainingApi: TrainingApi = {
   async getReadinessModel() {
     await delay();
     return clone(MOCK_MODEL);
+  },
+
+  async logSleep(hours) {
+    await delay();
+    const parsed = sleepSchema.safeParse({ hours });
+    if (!parsed.success) {
+      return fail("VALIDATION", "Check the highlighted fields.", {
+        fieldErrors: fieldErrorsFrom(parsed.error),
+      });
+    }
+    const s = getState();
+    s.sleepHours = Math.round(parsed.data.hours * 100) / 100;
+    return ok({ date: todayISO(), hours: s.sleepHours });
+  },
+
+  async clearSleep() {
+    await delay(50);
+    getState().sleepHours = null;
+    return ok(undefined);
   },
 
   async logAdHocSession(input) {

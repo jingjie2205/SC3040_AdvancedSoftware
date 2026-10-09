@@ -16,6 +16,7 @@ import type {
   ModelInfo,
   PlannedSession,
   Schedule,
+  SleepEntry,
   TodayView,
   TrainingPlan,
   TrainingPreferences,
@@ -32,6 +33,7 @@ export type ApiErrorCode =
   | "NOT_FOUND"
   | "INVALID_STATE"
   | "UNAUTHORIZED"
+  | "UNAVAILABLE"
   | "NETWORK"
   | "SERVER_ERROR"
   | MoveRefusalCode;
@@ -81,6 +83,9 @@ export interface TrainingApi {
 
   getToday(): Promise<TodayView>;
   getReadinessModel(): Promise<ModelInfo>;
+  /** Last night's sleep, filed under today. Entering it again replaces it. */
+  logSleep(hours: number): Promise<ApiResult<SleepEntry>>;
+  clearSleep(): Promise<ApiResult<void>>;
   respondToSession(id: string, response: SessionResponse): Promise<ApiResult<PlannedSession>>;
   logSession(id: string, input: LogWorkoutInput): Promise<ApiResult<LogResult>>;
   logAdHocSession(input: LogWorkoutInput): Promise<ApiResult<LogResult>>;

@@ -14,9 +14,16 @@ from .network import MLP
 ARTIFACT_PATH = Path(__file__).parent / "artifacts" / "readiness_v1.json"
 
 
+# Settings that change what is shown or which inputs are used, not how a score is computed. Changing
+# one must not retire a model labelled with the same scoring rules. Anything not listed here counts
+# as a scoring rule, so a new setting retires the model until it is retrained (the safe default).
+_NOT_SCORING = frozenset({"max_factors_shown", "use_trained_model", "checkin_max_age_days"})
+
+
 def rules_fingerprint(rules: ReadinessRules) -> str:
-    """Identifies the rule settings a model was labelled with, so a change to them is noticed."""
-    return hashlib.sha256(json.dumps(asdict(rules), sort_keys=True).encode()).hexdigest()[:16]
+    """Identifies the scoring rules a model was labelled with, so a change to them is noticed."""
+    scoring = {name: value for name, value in asdict(rules).items() if name not in _NOT_SCORING}
+    return hashlib.sha256(json.dumps(scoring, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def write_artifact(artifact: Dict[str, Any], path: Path = ARTIFACT_PATH) -> None:

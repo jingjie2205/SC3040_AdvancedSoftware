@@ -6,12 +6,32 @@ import { TRAINING_RULES as R } from "./config";
 import { addDays, diffDays, startOfWeek } from "./dates";
 import type { TrainingPreferencesInput } from "./schemas";
 import { WEEKDAYS } from "./types";
-import type { IntensityBand, PlannedSession, WorkoutSession } from "./types";
+import type { ActivityType, Goal, IntensityBand, PlannedSession, WorkoutSession } from "./types";
 
 const BAND_WEIGHT: Record<IntensityBand, number> = { push: 1, light: 0.7, deload: 0.6 };
 const DURATION_FACTOR: Record<IntensityBand, number> = { push: 1, light: 0.75, deload: 0.6 };
 
 const roundTo5 = (n: number) => Math.max(15, Math.round(n / 5) * 5);
+
+/** Mirrors the backend: a goal gives the activities it favours extra turns in the weekly rotation. */
+const GOAL_TURNS: Record<Goal, Partial<Record<ActivityType, number>>> = {
+  lose_weight: { run: 2, cycling: 2 },
+  build_muscle: { gym: 2, bodyweight: 2 },
+  maintain: {},
+};
+
+/** The user's own list when nothing is favoured; otherwise the favoured types repeat, interleaved. */
+export function activityRotation(types: ActivityType[], goal: Goal | null): ActivityType[] {
+  const turns = goal ? GOAL_TURNS[goal] : {};
+  const counts = types.map((type) => Math.max(1, turns[type] ?? 1));
+  const rotation: ActivityType[] = [];
+  for (let round = 0; round < Math.max(...counts); round++) {
+    types.forEach((type, index) => {
+      if (round < counts[index]) rotation.push(type);
+    });
+  }
+  return rotation;
+}
 
 export type SessionDraft = Omit<PlannedSession, "id" | "planId">;
 
@@ -84,12 +104,15 @@ interface BuildArgs {
   targets: WeekTarget[];
   /** Sessions before this date are left out (already in the past). */
   fromDate: string;
+  /** Tilts which of the user's activities come up more often. */
+  goal?: Goal | null;
 }
 
-export function buildSessions({ prefs, startDate, targets, fromDate }: BuildArgs): SessionDraft[] {
+export function buildSessions({ prefs, startDate, targets, fromDate, goal = null }: BuildArgs): SessionDraft[] {
   const available = WEEKDAYS.flatMap((day, index) => (prefs.restDays.includes(day) ? [] : [index]));
   const perWeek = Math.min(prefs.daysPerWeek, available.length);
   if (perWeek === 0) return [];
+  const rotation = activityRotation(prefs.activityTypes, goal);
 
   const drafts: SessionDraft[] = [];
   // Every third session is a push, and a push never follows another on the next day, even across weeks.
@@ -117,7 +140,7 @@ export function buildSessions({ prefs, startDate, targets, fromDate }: BuildArgs
       const band = slot.band;
       drafts.push({
         date: slot.date,
-        activityType: prefs.activityTypes[(slot.order + week) % prefs.activityTypes.length],
+        activityType: rotation[(slot.order + week) % rotation.length],
         targetVolume: Math.round((weekVolume * BAND_WEIGHT[band]) / weightTotal),
         targetDurationMin: roundTo5(prefs.sessionDurationMin * DURATION_FACTOR[band]),
         intensityBand: band,

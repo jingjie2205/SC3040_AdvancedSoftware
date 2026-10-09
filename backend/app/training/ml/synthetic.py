@@ -17,8 +17,8 @@ from ..config import READINESS_RULES, ReadinessRules
 from ..readiness import ReadinessFeatures, RuleBasedScorer
 from .features import FEATURE_ORDER
 
-# Share of simulated athletes in each data-availability pattern. "Today" is what the app produces
-# right now (workouts only, since check-ins, sleep and exam dates are not wired up yet).
+# Share of simulated athletes in each data-availability pattern. "Today" is a user who has only logged
+# workouts: no check-in, no sleep entry and no exam date. Every signal is optional in the app.
 _SCENARIO_WEIGHTS = (0.25, 0.25, 0.15, 0.32, 0.03)  # today, most signals, all signals, random, nothing
 _WIDE_SHARE = 0.08  # rows redrawn uniformly over the full range, so the extremes are covered
 

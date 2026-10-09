@@ -39,6 +39,31 @@ class AthleteProfile:
     """The parts of the user's profile that shape a plan. Anything can be missing."""
 
     activity_level: Optional[str] = None
+    # As the Settings page stores it: DEFICIT, MAINTAIN or SURPLUS.
+    fitness_goal: Optional[str] = None
+
+
+def goal_for(profile: Optional[AthleteProfile], rules: TrainingRules = RULES) -> Optional[str]:
+    """The profile's goal in this feature's terms, or None when it is missing or isn't one Settings offers."""
+    if profile is None or profile.fitness_goal is None:
+        return None
+    return rules.profile_goal_map.get(str(profile.fitness_goal).strip().upper())
+
+
+def activity_rotation(
+    activity_types: Sequence[ActivityType], goal: Optional[str], rules: TrainingRules = RULES
+) -> List[ActivityType]:
+    """
+    The order activities come up in, repeating. With no goal (or one that favours nothing the user
+    picked) it is their own list, so every activity gets an equal share. A goal gives the types it
+    favours extra turns, interleaved rather than back to back, and never adds a type the user didn't pick.
+    """
+    weights = rules.goal_activity_weights.get(goal or "", {})
+    turns = {kind: max(1, int(weights.get(kind, 1))) for kind in activity_types}
+    rotation: List[ActivityType] = []
+    for round_ in range(max(turns.values())):
+        rotation.extend(kind for kind in activity_types if round_ < turns[kind])
+    return rotation
 
 
 @dataclass(frozen=True)
@@ -135,18 +160,21 @@ def build_sessions(
     targets: Sequence[WeekTarget],
     from_date: date,
     rules: TrainingRules = RULES,
+    goal: Optional[str] = None,
 ) -> List[SessionDraft]:
     """
     Spread each week's sessions across the available days.
 
     `start` must be a Monday. Sessions before `from_date` are left out (already in the past).
     Every third session is a push session, and a push is never placed the day after another,
-    including across a week boundary.
+    including across a week boundary. `goal` only changes which of the user's activities come up
+    more often (see `activity_rotation`), never when sessions fall or how hard they are.
     """
     available = [i for i, day in enumerate(WEEKDAYS) if day not in prefs.rest_days]
     per_week = min(prefs.days_per_week, len(available))
     if per_week == 0:
         return []
+    rotation = activity_rotation(prefs.activity_types, goal, rules)
 
     drafts: List[SessionDraft] = []
     last_push: Optional[date] = None
@@ -177,7 +205,7 @@ def build_sessions(
             drafts.append(
                 SessionDraft(
                     date=day,
-                    activity_type=prefs.activity_types[(order + week) % len(prefs.activity_types)],
+                    activity_type=rotation[(order + week) % len(rotation)],
                     target_volume=round_half_up(week_volume * rules.band_weight[band] / weight_total),
                     target_duration_min=_round_duration(
                         prefs.session_duration_min * rules.band_duration_factor[band], rules

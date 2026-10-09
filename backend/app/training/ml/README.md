@@ -29,8 +29,8 @@ rule-based fallback; it is designed to be retrained on real labelled data when w
 
 - **Inputs.** The five signals in `ReadinessFeatures` (load ratio, heart-rate trend, check-in
   rating, sleep, days until an exam). Each becomes two network inputs: whether it is present, and
-  its value scaled to [-1, 1]. Missing signals are normal (check-ins, sleep and exam dates are not
-  wired up yet), so the cohort deliberately contains many rows with few or no signals.
+  its value scaled to [-1, 1]. Missing signals are normal (check-ins, sleep and exam dates are all
+  optional), so the cohort deliberately contains many rows with few or no signals.
 - **Network.** 10 inputs, two hidden ReLU layers (32 and 16), one output (score / 100). About 900
   weights, shipped as `artifacts/readiness_v1.json`.
 - **Score and band.** The output is rounded to 0 to 100. The band (`deload` / `light` / `push`)
@@ -76,9 +76,12 @@ when:
 - `READINESS_RULES.use_trained_model` is `False`;
 - the file is missing, malformed, has non-finite weights, or was trained on a different feature
   encoding;
-- **the readiness rules in `config.py` have changed since the model was trained.** This is
+- **the scoring rules in `config.py` have changed since the model was trained.** This is
   intentional: QA varies those thresholds to test behaviour, and a model trained on the old values
-  would silently ignore the change. Retrain after changing a rule you intend to keep.
+  would silently ignore the change. Retrain after changing a rule you intend to keep. Settings that
+  only change what is shown or which inputs are used (`max_factors_shown`, `use_trained_model`,
+  `checkin_max_age_days`) are not scoring rules and don't retire the model; a test enforces that every
+  other setting does.
 
 The scorer's version is part of the readiness cache key, so switching scorers recomputes today's
 score instead of serving the previous scorer's answer.
