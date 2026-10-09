@@ -96,6 +96,20 @@ export async function fetchDailyLog(day: string, signal?: AbortSignal): Promise<
   return (await request(`/daily?day=${day}&offset_minutes=${offset}`, { signal })).json();
 }
 
+export async function fetchBatchDailyLog(
+  startDate: string,
+  endDate: string,
+  signal?: AbortSignal
+): Promise<DailyLog[]> {
+  const offset = -new Date(`${endDate}T12:00:00`).getTimezoneOffset();
+  return (
+    await request(
+      `/batch_daily?start_date=${startDate}&end_date=${endDate}&offset_minutes=${offset}`,
+      { signal }
+    )
+  ).json();
+}
+
 export async function saveMeal(meal: MealEstimate & { id: string; meal_type: MealType; logged_at: string }): Promise<MealRecord> {
   return (await request("/meals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(meal) })).json();
 }
