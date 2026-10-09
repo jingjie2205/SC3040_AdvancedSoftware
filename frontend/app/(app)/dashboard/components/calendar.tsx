@@ -3,8 +3,8 @@
 import { Session } from "@supabase/supabase-js";
 import { useMemo, useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { getMyCheckIns, checkIn } from "../../lib/checkin/api";
-import "../assets/calendar.css";
+import { getMyCheckIns, checkIn } from "../../../../lib/checkin/api";
+import "../../../assets/calendar.css";
 
 function calculateStreak(dates: string[]): number {
   if (dates.length === 0) {

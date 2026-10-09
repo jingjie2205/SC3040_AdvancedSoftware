@@ -35,7 +35,7 @@ import {
 } from "recharts";
 
 import { fetchBatchDailyLog, DailyLog } from "@/lib/nutrition";
-import Calendar from "../../components/calendar";
+import Calendar from "./components/calendar";
 
 /* ------------------------------------------------------------------ */
 /* Mock data                                                          */
