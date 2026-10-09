@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRAINING_RULES as R } from "./config";
-import { todayISO } from "./dates";
+import { addDays, isValidISODate, todayISO } from "./dates";
 import { ACTIVITY_TYPES, WEEKDAYS } from "./types";
 
 /**
@@ -25,6 +25,10 @@ export const trainingPreferencesSchema = z
     ),
     activityTypes: z.array(z.enum(ACTIVITY_TYPES)).min(1, "Select at least one activity type"),
     restDays: z.array(z.enum(WEEKDAYS)),
+    examDates: z
+      .array(z.string().refine(isValidISODate, "Enter a valid date"))
+      .max(R.examDates.max, `Add at most ${R.examDates.max} exam dates`)
+      .default([]),
   })
   .superRefine((value, ctx) => {
     const freeDays = 7 - value.restDays.length;
@@ -35,12 +39,27 @@ export const trainingPreferencesSchema = z
         message: `Only ${freeDays} day${freeDays === 1 ? " is" : "s are"} free, but you want ${value.daysPerWeek} training days`,
       });
     }
+    const latest = addDays(todayISO(), R.examDates.horizonDays);
+    if (value.examDates.some((day) => day > latest)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["examDates"],
+        message: `Exam dates can be at most ${R.examDates.horizonDays} days ahead`,
+      });
+    }
   });
 
 export type TrainingPreferencesInput = z.infer<typeof trainingPreferencesSchema>;
 
 export const generatePlanSchema = z.object({
   weeks: wholeNumber("Plan length", R.planWeeks.min, R.planWeeks.max),
+});
+
+export const sleepSchema = z.object({
+  hours: z
+    .number({ invalid_type_error: "Sleep must be a number", required_error: "Enter your hours of sleep" })
+    .min(R.sleepHours.min, `Sleep must be between ${R.sleepHours.min} and ${R.sleepHours.max} hours`)
+    .max(R.sleepHours.max, `Sleep must be between ${R.sleepHours.min} and ${R.sleepHours.max} hours`),
 });
 
 export const logWorkoutSchema = z.object({

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Loader2, RefreshCw, ShieldAlert, Sparkles } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -16,7 +17,7 @@ import { trainingApi } from "@/lib/training/api";
 import { TRAINING_RULES as R } from "@/lib/training/config";
 import { addDays, formatDay, formatShortDate } from "@/lib/training/dates";
 import { fieldErrorsFrom, generatePlanSchema, numberFromInput } from "@/lib/training/schemas";
-import type { Schedule, TrainingPlan, TrainingPreferences } from "@/lib/training/types";
+import type { Goal, Schedule, TrainingPlan, TrainingPreferences } from "@/lib/training/types";
 import {
   ConfirmDialog,
   ErrorBox,
@@ -27,6 +28,27 @@ import {
   cardClass,
   inputClass,
 } from "./ui";
+
+/** What the plan's goal did to it. Only activities the user chose are ever used, hence "when you've chosen them". */
+const GOAL_NOTE: Record<Goal | "none", string> = {
+  lose_weight: "Weight loss. Run and cycling sessions get extra turns in your mix, when you've chosen them.",
+  build_muscle: "Muscle gain. Gym and bodyweight sessions get extra turns in your mix, when you've chosen them.",
+  maintain: "Maintenance. Your chosen activities are mixed evenly.",
+  none: "No goal found in your profile, so your chosen activities are mixed evenly.",
+};
+
+function GoalNote({ goal }: { goal: Goal | null }) {
+  return (
+    <p className="mt-3 text-xs text-slate-400">
+      <span className="font-semibold text-slate-300">Goal: </span>
+      {GOAL_NOTE[goal ?? "none"]}{" "}
+      <Link href="/dashboard/settings" className="font-semibold text-emerald-400 hover:underline">
+        Change it in Settings
+      </Link>
+      . It applies the next time a plan is generated or adapted.
+    </p>
+  );
+}
 
 function LegendItem({ swatch, label }: { swatch: string; label: string }) {
   return (
@@ -187,8 +209,9 @@ export function PlanPanel({
             <p className="text-xs text-slate-400">
               {plan
                 ? `${formatDay(plan.startDate)} to ${formatDay(plan.endDate)} · ${plan.weeks} weeks · baseline ${plan.baselineVolume} pts/week`
-                : "Built from your preferences, goal and the last 4 weeks of completed training."}
+                : "Built from your preferences, your profile goal and activity level, and the last 4 weeks of completed training."}
             </p>
+            {plan && <GoalNote goal={plan.goal} />}
           </div>
         </div>
 

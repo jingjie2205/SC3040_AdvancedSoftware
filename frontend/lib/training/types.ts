@@ -1,6 +1,9 @@
 export const ACTIVITY_TYPES = ["run", "gym", "cycling", "bodyweight"] as const;
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 
+/** The profile goal a plan was built for. Settings stores it as DEFICIT, MAINTAIN or SURPLUS. */
+export type Goal = "lose_weight" | "maintain" | "build_muscle";
+
 export const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 export type Weekday = (typeof WEEKDAYS)[number];
 
@@ -20,6 +23,8 @@ export interface TrainingPreferences {
   sessionDurationMin: number;
   activityTypes: ActivityType[];
   restDays: Weekday[];
+  /** Upcoming exams as "YYYY-MM-DD", earliest first. Readiness dips in the week before one. */
+  examDates: string[];
   updatedAt: string;
 }
 
@@ -41,6 +46,8 @@ export interface TrainingPlan {
   baselineVolume: number;
   createdAt: string;
   notice: string;
+  /** The profile goal when the plan was generated or last adapted, or null if the profile had none. */
+  goal: Goal | null;
   lastAdaptation: PlanAdaptation | null;
 }
 
@@ -110,6 +117,13 @@ export interface TodayView {
   planned: PlannedSession | null;
   recommendation: SessionRecommendation | null;
   logged: WorkoutSession | null;
+  /** Last night's sleep as entered today, or null if none has been. */
+  sleepHours: number | null;
+}
+
+export interface SleepEntry {
+  date: string;
+  hours: number;
 }
 
 export interface Schedule {

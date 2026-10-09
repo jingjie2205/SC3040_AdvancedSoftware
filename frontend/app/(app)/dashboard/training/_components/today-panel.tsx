@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   ArrowDown,
   Check,
@@ -9,6 +9,7 @@ import {
   Loader2,
   Lock,
   Minus,
+  Moon,
   Plus,
   Repeat,
   SkipForward,
@@ -17,8 +18,10 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { trainingApi, type SessionResponse } from "@/lib/training/api";
+import { TRAINING_RULES as R } from "@/lib/training/config";
 import { formatDay } from "@/lib/training/dates";
 import { MOVABLE_STATUSES, LOGGABLE_STATUSES } from "@/lib/training/rules";
+import { fieldErrorsFrom, numberFromInput, sleepSchema } from "@/lib/training/schemas";
 import type {
   ActivityType,
   ReadinessFactor,
@@ -35,6 +38,7 @@ import {
   BAND_META,
   BandBadge,
   ErrorBox,
+  FieldError,
   Loading,
   StatusBadge,
   ToggleChip,
@@ -42,6 +46,7 @@ import {
   btnPrimary,
   btnSecondary,
   cardClass,
+  inputInlineClass,
 } from "./ui";
 
 /* ------------------------------------------------------------------ */
@@ -114,7 +119,12 @@ export function TodayPanel({
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <ReadinessCard readiness={readiness} />
+      <ReadinessCard
+        readiness={readiness}
+        sleepHours={view.sleepHours}
+        onChanged={onChanged}
+        onNotice={onNotice}
+      />
 
       <div className={`${cardClass} lg:col-span-2 flex flex-col`}>
         <div className="mb-5 flex items-start justify-between gap-3">
@@ -304,7 +314,17 @@ export function TodayPanel({
 /* Readiness                                                           */
 /* ------------------------------------------------------------------ */
 
-function ReadinessCard({ readiness }: { readiness: ReadinessScore }) {
+function ReadinessCard({
+  readiness,
+  sleepHours,
+  onChanged,
+  onNotice,
+}: {
+  readiness: ReadinessScore;
+  sleepHours: number | null;
+  onChanged: () => void;
+  onNotice: (message: string) => void;
+}) {
   const meta = BAND_META[readiness.classification];
   return (
     <div className={cardClass}>
@@ -338,8 +358,103 @@ function ReadinessCard({ readiness }: { readiness: ReadinessScore }) {
         </ul>
       </div>
 
+      <SleepRow hours={sleepHours} onChanged={onChanged} onNotice={onNotice} />
+
       <ScorerNote />
     </div>
+  );
+}
+
+/**
+ * Last night's sleep. Nothing else in the app records it, so it is entered here, once a day, and
+ * only moves today's score. Saving again replaces it; clearing takes it back out.
+ */
+function SleepRow({
+  hours,
+  onChanged,
+  onNotice,
+}: {
+  hours: number | null;
+  onChanged: () => void;
+  onNotice: (message: string) => void;
+}) {
+  const [value, setValue] = useState(hours === null ? "" : String(hours));
+  const [error, setError] = useState<string | undefined>();
+  const [busy, setBusy] = useState(false);
+
+  // Follows the saved value, which changes once the card has reloaded.
+  useEffect(() => {
+    setValue(hours === null ? "" : String(hours));
+    setError(undefined);
+  }, [hours]);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    const parsed = sleepSchema.safeParse({ hours: numberFromInput(value) });
+    if (!parsed.success) {
+      setError(fieldErrorsFrom(parsed.error).hours);
+      return;
+    }
+    setError(undefined);
+    setBusy(true);
+    const result = await trainingApi.logSleep(parsed.data.hours);
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error.fieldErrors?.hours ?? result.error.message);
+      return;
+    }
+    onNotice("Sleep saved. Your readiness score has been updated.");
+    onChanged();
+  }
+
+  async function clear() {
+    setError(undefined);
+    setBusy(true);
+    const result = await trainingApi.clearSleep();
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error.message);
+      return;
+    }
+    onNotice("Sleep entry removed.");
+    onChanged();
+  }
+
+  return (
+    <form onSubmit={save} noValidate className="mt-5 border-t border-slate-800 pt-4">
+      <label htmlFor="sleep-hours" className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+        <Moon className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+        Last night&apos;s sleep
+      </label>
+      <p className="mt-0.5 text-[11px] text-slate-400">
+        Optional. {hours === null ? "Add it to sharpen today's score." : "Included in today's score."}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <input
+          id="sleep-hours"
+          type="number"
+          inputMode="decimal"
+          step="0.25"
+          min={R.sleepHours.min}
+          max={R.sleepHours.max}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          aria-invalid={Boolean(error)}
+          className={`${inputInlineClass} w-24`}
+        />
+        <span className="text-xs text-slate-400">hours</span>
+        <button type="submit" disabled={busy || value.trim() === ""} className={btnSecondary}>
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+          {hours === null ? "Save" : "Update"}
+        </button>
+        {hours !== null && (
+          <button type="button" onClick={clear} disabled={busy} className={btnSecondary}>
+            Clear
+          </button>
+        )}
+      </div>
+      <FieldError message={error} />
+    </form>
   );
 }
 

@@ -10,6 +10,8 @@ export const TRAINING_RULES = {
   deloadVolumeFactor: 0.7,
   weeklyProgressionPct: 5,
   maxWeeklyIncreasePct: 10,
+  examDates: { max: 10, horizonDays: 730 },
+  sleepHours: { min: 0, max: 16 },
   baselineWindowWeeks: 4,
   minHistoryWeeksForBaseline: 2,
   defaultBaselineVolume: 100,

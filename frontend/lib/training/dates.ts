@@ -14,6 +14,11 @@ export function parseISODate(iso: string): Date {
   return new Date(y, m - 1, d);
 }
 
+/** True for a real calendar date written as YYYY-MM-DD (so "2026-13-45" and "soon" are not). */
+export function isValidISODate(iso: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) && toISODate(parseISODate(iso)) === iso;
+}
+
 export function todayISO(): string {
   return toISODate(new Date());
 }
