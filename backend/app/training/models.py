@@ -120,6 +120,7 @@ class WorkoutSession(ApiModel):
     actual_duration_min: int
     rpe: Optional[int] = None
     avg_hr: Optional[int] = None
+    calories: Optional[int] = None
     source: WorkoutSource = "manual"
     created_at: datetime
 
@@ -283,3 +284,4 @@ class LogWorkoutInput(ApiModel):
     actual_volume: float = Field(gt=0, le=RULES.workout_volume_max)
     rpe: Optional[int] = Field(default=None, ge=RULES.workout_rpe_min, le=RULES.workout_rpe_max)
     avg_hr: Optional[int] = Field(default=None, ge=RULES.workout_hr_min, le=RULES.workout_hr_max)
+    calories: Optional[int] = Field(default=None, ge=0)

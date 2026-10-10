@@ -1,6 +1,10 @@
 "use client";
 
+import { httpTrainingApi } from "@/lib/training/http-api";
+import { WorkoutSession } from "@/lib/training/types";
 import { useEffect, useMemo, useState } from "react";
+import Calendar from "./components/calendar";
+
 import {
   Activity,
   Apple,
@@ -8,7 +12,10 @@ import {
   //Calendar,
   Check,
   Flame,
+  Bike,
+  Dumbbell,
   Footprints,
+  Waves,
   Heart,
   Loader2,
   Pencil,
@@ -37,14 +44,14 @@ import {
 
 import { useRouter } from "next/navigation";
 import { fetchBatchCalories, BatchCalories } from "@/lib/nutrition";
-import Calendar from "./components/calendar";
+import { getActivityIcon } from "./components/icons";
 
 /* ------------------------------------------------------------------ */
 /* Mock data                                                          */
 /* ------------------------------------------------------------------ */
 
-type TrainingView = "daily" | "weekly" | "latest";
-type FoodView = "daily" | "weekly";
+type TrainingView = "weekly" | "latest";
+type FoodView = "weekly";
 
 const DAILY_TRAINING = [
   { label: "Mon", mileage: 4.2, avgHr: 138 },
@@ -141,9 +148,12 @@ export default function HomePage() {
 
   // Training / food view toggles
   const [trainingView, setTrainingView] = useState<TrainingView>("latest");
-  const [foodView, setFoodView] = useState<FoodView>("daily");
+  const [foodView, setFoodView] = useState<FoodView>("weekly");
   const [dailyFoodData, setDailyFoodData] = useState<any[]>([]);
   const [weeklyFoodData, setWeeklyFoodData] = useState<any[]>([]);
+  const [latestWorkout, setLatestWorkout] = useState<WorkoutSession | null>(
+    null,
+  );
 
   useEffect(() => {
     async function fetchFoodData() {
@@ -206,15 +216,38 @@ export default function HomePage() {
     fetchFoodData();
   }, []);
 
+  useEffect(() => {
+    async function fetchLatestWorkout() {
+      const today = new Date();
+      const to = today.toISOString().split("T")[0];
+      const from = new Date();
+      from.setDate(today.getDate() - 6);
+      const fromDate = from.toISOString().split("T")[0];
+
+      try {
+        const schedule = await httpTrainingApi.getSchedule(fromDate, to);
+        if (schedule.workouts.length > 0) {
+          const sortedWorkouts = [...schedule.workouts].sort(
+            (a, b) =>
+              new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+          );
+          setLatestWorkout(sortedWorkouts[0]);
+        }
+      } catch (error) {
+        console.error("Failed to fetch latest workout:", error);
+      }
+    }
+    fetchLatestWorkout();
+  }, []);
+
   const bmi = useMemo(() => {
     if (height && weight) return computeBmi(height, weight);
     return null;
   }, [height, weight]);
   const bmiInfo = bmi ? bmiCategory(bmi) : null;
 
-  const trainingData =
-    trainingView === "daily" ? DAILY_TRAINING : WEEKLY_TRAINING;
-  const foodData = foodView === "daily" ? dailyFoodData : weeklyFoodData;
+  const trainingData = WEEKLY_TRAINING;
+  const foodData = weeklyFoodData;
 
   useEffect(() => {
     async function fetchUserData() {
@@ -447,7 +480,7 @@ export default function HomePage() {
               </p>
             </div>
             <div className="flex gap-1 rounded-lg border border-slate-800 bg-slate-950/60 p-1 w-fit">
-              {(["daily", "weekly", "latest"] as TrainingView[]).map((view) => (
+              {(["weekly", "latest"] as TrainingView[]).map((view) => (
                 <button
                   key={view}
                   onClick={() => setTrainingView(view)}
@@ -465,33 +498,62 @@ export default function HomePage() {
 
           {trainingView === "latest" ? (
             <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
-              <div className="sm:col-span-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-                <div className="flex items-center gap-2 text-sm font-bold text-white">
-                  <Footprints className="h-4 w-4 text-emerald-400" />
-                  {LATEST_ACTIVITY.type}
+              {latestWorkout ? (
+                (() => {
+                  const ActivityIcon = getActivityIcon(
+                    latestWorkout.activityType,
+                  );
+                  return (
+                    <>
+                      <div className="sm:col-span-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                        <div className="flex items-center gap-2 text-sm font-bold text-white">
+                          <ActivityIcon className="h-4 w-4 text-emerald-400" />
+                          {latestWorkout.activityType}
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {new Date(latestWorkout.createdAt).toLocaleString()}
+                        </p>
+                      </div>
+                      <StatBlock
+                        label="Volume"
+                        value={`${latestWorkout.actualVolume} points`}
+                      />
+                      <StatBlock
+                        label="Duration"
+                        value={`${latestWorkout.actualDurationMin} min`}
+                      />
+                      <StatBlock
+                        label="Avg HR"
+                        value={
+                          latestWorkout.avgHr
+                            ? `${latestWorkout.avgHr} bpm`
+                            : "-"
+                        }
+                        icon={<Heart className="h-3.5 w-3.5 text-rose-400" />}
+                      />
+                      <StatBlock
+                        label="RPE"
+                        value={
+                          latestWorkout.rpe ? String(latestWorkout.rpe) : "-"
+                        }
+                      />
+                      <StatBlock
+                        label="Calories"
+                        value={
+                          latestWorkout.calories
+                            ? `${latestWorkout.calories} kcal`
+                            : "-"
+                        }
+                        icon={<Flame className="h-3.5 w-3.5 text-amber-400" />}
+                      />
+                    </>
+                  );
+                })()
+              ) : (
+                <div className="sm:col-span-5 text-center py-8 text-slate-400">
+                  No recent workouts found.
                 </div>
-                <p className="text-xs text-slate-400 mt-1">
-                  {LATEST_ACTIVITY.date}
-                </p>
-              </div>
-              <StatBlock
-                label="Distance"
-                value={`${LATEST_ACTIVITY.distanceKm} km`}
-              />
-              <StatBlock
-                label="Duration"
-                value={`${LATEST_ACTIVITY.durationMin} min`}
-              />
-              <StatBlock
-                label="Avg HR"
-                value={`${LATEST_ACTIVITY.avgHr} bpm`}
-                icon={<Heart className="h-3.5 w-3.5 text-rose-400" />}
-              />
-              <StatBlock label="Pace" value={LATEST_ACTIVITY.pace} />
-              <StatBlock
-                label="Calories"
-                value={`${LATEST_ACTIVITY.calories} kcal`}
-              />
+              )}
             </div>
           ) : (
             <div className="h-[260px] w-full">
@@ -544,9 +606,7 @@ export default function HomePage() {
               <h3 className="text-base font-bold text-white">
                 Food consumption
               </h3>
-              <p className="text-xs text-slate-400">
-                Calorie intake vs. daily goal
-              </p>
+              <p className="text-xs text-slate-400">Calorie intake</p>
             </div>
             <div className="flex gap-1 rounded-lg border border-slate-800 bg-slate-950/60 p-1 w-fit">
               {(["daily", "weekly"] as FoodView[]).map((view) => (

@@ -71,6 +71,7 @@ export interface WorkoutSession {
   actualDurationMin: number;
   rpe: number | null;
   avgHr: number | null;
+  calories: number | null;
   source: "manual" | "import";
   createdAt: string;
 }
