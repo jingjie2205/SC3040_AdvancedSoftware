@@ -6,6 +6,7 @@ because the leaderboard's tables aren't there.
 import ast
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from postgrest.exceptions import APIError
@@ -24,7 +25,6 @@ from training_fakes import (
     USER_A,
     USER_B,
     FakeTrainingRepository,
-    TableClient,
     seed_history,
 )
 
@@ -122,35 +122,56 @@ def test_only_logging_a_workout_awards_xp():
     assert repo.xp_calls == [] and repo.xp_awards == []
 
 
-# ------------------------------------------------------------------ the real helper, against a fake with her constraints
+# ------------------------------------------------------------------ the real helper, against a fake of her database function
 
 
-UNIQUE = {"xp_events": ("source", "source_id"), "gamification_stats": ("user_id",)}
 WORKOUT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 OTHER_WORKOUT = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
 
+class XpFunctionClient:
+    """
+    Stands in for award_gamification_xp (supabase/migrations/20261009120000_gamification_xp_sources.sql):
+    one XP event per (user, source, source_id), and a running total per user. `error` fails every call.
+    """
+
+    def __init__(self, error=None):
+        self.error, self.events, self.totals = error, [], {}
+
+    def rpc(self, name, params):
+        return SimpleNamespace(execute=lambda: self._call(name, params))
+
+    def _call(self, name, params):
+        if self.error:
+            raise self.error
+        assert name == "award_gamification_xp"
+        user, source, source_id = params["p_user_id"], params["p_source"], params["p_source_id"]
+        if (user, source, source_id) not in {(e["user_id"], e["source"], e["source_id"]) for e in self.events}:
+            self.events.append({"user_id": user, "source": source, "source_id": source_id, "amount": params["p_amount"]})
+            self.totals[user] = self.totals.get(user, 0) + params["p_amount"]
+        return SimpleNamespace(data=self.totals.get(user, 0))
+
+
 def real_helper():
-    client = TableClient({"xp_events": [], "gamification_stats": []}, unique=UNIQUE)
+    client = XpFunctionClient()
     return SupabaseTrainingRepository(client), client
 
 
 def test_the_real_helper_records_a_workout_event_with_the_workout_id_and_adds_the_xp():
     repo, client = real_helper()
     repo.award_workout_xp(USER_A, WORKOUT)
-    assert client.tables["xp_events"] == [
+    assert client.events == [
         {"user_id": USER_A, "source": "workout", "source_id": WORKOUT, "amount": XP_REWARDS["workout"]}
     ]
-    stats, = client.tables["gamification_stats"]
-    assert stats["user_id"] == USER_A and stats["total_xp"] == XP_REWARDS["workout"]
+    assert client.totals == {USER_A: XP_REWARDS["workout"]}
 
 
 def test_awarding_the_same_workout_twice_counts_once():
     repo, client = real_helper()
     repo.award_workout_xp(USER_A, WORKOUT)
     repo.award_workout_xp(USER_A, WORKOUT)
-    assert len(client.tables["xp_events"]) == 1
-    assert client.tables["gamification_stats"][0]["total_xp"] == XP_REWARDS["workout"]
+    assert len(client.events) == 1
+    assert client.totals == {USER_A: XP_REWARDS["workout"]}
 
 
 def test_two_workouts_add_up_and_each_user_has_their_own_total():
@@ -158,13 +179,12 @@ def test_two_workouts_add_up_and_each_user_has_their_own_total():
     repo.award_workout_xp(USER_A, WORKOUT)
     repo.award_workout_xp(USER_A, OTHER_WORKOUT)
     repo.award_workout_xp(USER_B, "cccccccc-cccc-4ccc-8ccc-cccccccccccc")
-    totals = {row["user_id"]: row["total_xp"] for row in client.tables["gamification_stats"]}
-    assert totals == {USER_A: 2 * XP_REWARDS["workout"], USER_B: XP_REWARDS["workout"]}
+    assert client.totals == {USER_A: 2 * XP_REWARDS["workout"], USER_B: XP_REWARDS["workout"]}
 
 
 @pytest.mark.parametrize("code", ["42P01", "42703", "PGRST204", "PGRST205"])
 def test_a_database_without_the_leaderboard_tables_awards_nothing_and_says_so_once(code, caplog):
-    repo = SupabaseTrainingRepository(TableClient(error=api_error(code)))
+    repo = SupabaseTrainingRepository(XpFunctionClient(error=api_error(code)))
     with caplog.at_level("WARNING"):
         repo.award_workout_xp(USER_A, WORKOUT)
         repo.award_workout_xp(USER_B, OTHER_WORKOUT)
@@ -172,7 +192,7 @@ def test_a_database_without_the_leaderboard_tables_awards_nothing_and_says_so_on
 
 
 def test_any_other_database_error_is_left_for_the_service_to_log():
-    repo = SupabaseTrainingRepository(TableClient(error=api_error("42501")))
+    repo = SupabaseTrainingRepository(XpFunctionClient(error=api_error("42501")))
     with pytest.raises(APIError):
         repo.award_workout_xp(USER_A, WORKOUT)
 

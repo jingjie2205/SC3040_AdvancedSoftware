@@ -22,19 +22,3 @@ export async function getMyCheckIns(token: string): Promise<CheckInDatesResponse
 
   return response.json();
 }
-
-export async function checkIn(token: string): Promise<CheckInDatesResponse> {
-  const response = await fetch(`${API_URL}/checkin/me`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to check in");
-  }
-
-  return response.json();
-}

@@ -56,7 +56,7 @@ async def get_leaderboard(
     limit: int = Query(10, ge=1, le=50),
     user_id: str = Depends(get_current_user_id),
 ) -> Any:
-    # TODO: restrict to the user's friends once the friends table (F-1) exists; global for now.
+    """The user and their friends, ranked by XP or by current check-in streak."""
     entries = gamification_service.get_leaderboard(
         get_supabase_admin(), user_id, metric, limit, gamification_service.today_local()
     )

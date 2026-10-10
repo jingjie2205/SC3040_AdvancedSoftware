@@ -21,6 +21,7 @@ TODAY = date(2026, 10, 5)
 ALICE = "00000000-0000-0000-0000-00000000000a"
 BOB = "00000000-0000-0000-0000-00000000000b"
 CAROL = "00000000-0000-0000-0000-00000000000c"
+DAVE = "00000000-0000-0000-0000-00000000000d"
 
 
 # ---------------------------------------------------------------------------
@@ -186,9 +187,19 @@ class FakeSupabase:
 METRICS = {"muscleFatigue": 3, "mood": 4, "dietAdherence": 5}
 
 
+def befriend(sb, sender, recipient, status="accepted"):
+    sb.db.setdefault("friend_requests", []).append(
+        {"sender_id": sender, "recipient_id": recipient, "status": status}
+    )
+
+
 @pytest.fixture
 def sb():
-    return FakeSupabase()
+    """Alice is friends with Bob (she sent the request) and Carol (Carol sent it); Dave is a stranger."""
+    fake = FakeSupabase()
+    befriend(fake, ALICE, BOB)
+    befriend(fake, CAROL, ALICE)
+    return fake
 
 
 # --- Pure rules -------------------------------------------------------------
@@ -293,8 +304,9 @@ def test_leaderboard_by_xp_orders_and_flags_current_user(sb):
 
     entries = svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)
 
-    assert [e["userId"] for e in entries] == [BOB, ALICE]
-    assert [e["position"] for e in entries] == [1, 2]
+    # Carol is a friend without XP yet, so she is listed last with 0
+    assert [(e["userId"], e["totalXp"]) for e in entries] == [(BOB, 60), (ALICE, 50), (CAROL, 0)]
+    assert [e["position"] for e in entries] == [1, 2, 3]
     assert entries[1]["isCurrentUser"] is True
 
 
@@ -591,7 +603,7 @@ def test_profile_names_are_shown_when_set(sb):
     challenge = make_challenge(sb)
 
     names = {e["userId"]: e["displayName"] for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)}
-    assert names == {ALICE: None, BOB: "Bob Tan"}
+    assert names == {ALICE: None, BOB: "Bob Tan", CAROL: None}
     assert {p["userId"]: p["displayName"] for p in challenge["participants"]} == {ALICE: None, BOB: "Bob Tan"}
     assert challenge["creatorName"] is None
 
@@ -602,3 +614,69 @@ def test_xp_history_endpoint(client):
     events = client.get("/gamification/xp-events").json()["events"]
 
     assert [(e["source"], e["amount"]) for e in events] == [("checkin", 10)]
+
+
+# --- Friends ----------------------------------------------------------------
+
+def test_friends_are_found_whichever_side_sent_the_request(sb):
+    befriend(sb, DAVE, BOB, status="pending")
+    befriend(sb, ALICE, DAVE, status="rejected")
+
+    assert sorted(svc.friend_ids(sb, ALICE)) == sorted([BOB, CAROL])
+    assert svc.friend_ids(sb, BOB) == [ALICE]
+    assert svc.friend_ids(sb, DAVE) == []
+
+
+def test_leaderboard_shows_only_the_user_and_their_friends(sb):
+    for uid in (ALICE, BOB, DAVE):
+        svc.award_xp(sb, uid, "meal", 10, str(uuid.uuid4()))
+    svc.perform_checkin(sb, DAVE, METRICS, TODAY)
+
+    by_xp = {e["userId"] for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)}
+    by_streak = {e["userId"] for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.STREAK, 10, TODAY)}
+    dave_view = [e["userId"] for e in svc.get_leaderboard(sb, DAVE, LeaderboardMetric.XP, 10, TODAY)]
+
+    assert by_xp == {ALICE, BOB, CAROL}
+    assert by_streak == set()
+    assert dave_view == [DAVE]
+
+
+def test_leaderboard_limit_applies_after_adding_friends_without_xp(sb):
+    entries = svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 2, TODAY)
+    assert len(entries) == 2
+
+
+def test_only_friends_can_be_invited(sb):
+    with pytest.raises(svc.InvalidChallengeError, match="friends"):
+        make_challenge(sb, invitees=(BOB, DAVE))
+    assert not sb.db.get("challenges")
+
+
+def test_inviting_a_non_friend_over_http_is_rejected(client):
+    body = {
+        "title": "Sneaky",
+        "metric": "xp",
+        "targetValue": 10,
+        "startDate": TODAY.isoformat(),
+        "endDate": TODAY.isoformat(),
+        "inviteeIds": [DAVE],
+    }
+    response = client.post("/gamification/challenges", json=body)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "You can only invite your friends"
+
+
+# --- Home-page calendar reads the same check-ins ------------------------------
+
+def test_calendar_dates_come_from_the_questionnaire_check_ins(client, sb, monkeypatch):
+    from app.controllers import checkin as checkin_controller
+
+    monkeypatch.setattr(checkin_controller, "get_supabase_admin", lambda: sb)
+    svc.perform_checkin(sb, ALICE, METRICS, TODAY - timedelta(days=1))
+    client.post("/gamification/checkins", json=METRICS)
+    svc.perform_checkin(sb, BOB, METRICS, TODAY)
+
+    body = client.get("/checkin/me/dates").json()
+
+    assert body == {"user_id": ALICE, "dates": [(TODAY - timedelta(days=1)).isoformat(), TODAY.isoformat()]}
+    assert client.post("/checkin/me").status_code == 404  # one-click check-in was removed

@@ -88,8 +88,8 @@ function mockGoal(): Goal | null {
   return asked === "lose_weight" || asked === "build_muscle" || asked === "maintain" ? asked : "maintain";
 }
 
-function makeWorkout(fields: Omit<WorkoutSession, "id" | "createdAt">): WorkoutSession {
-  return { id: nextId("w"), createdAt: new Date().toISOString(), ...fields };
+function makeWorkout(fields: Omit<WorkoutSession, "id" | "createdAt" | "calories">): WorkoutSession {
+  return { id: nextId("w"), createdAt: new Date().toISOString(), calories: null, ...fields };
 }
 
 /** Three logged sessions a week for the 4 weeks before `endExclusive` (a Monday). */

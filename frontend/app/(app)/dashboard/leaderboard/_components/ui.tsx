@@ -39,6 +39,8 @@ export const CHALLENGE_METRIC_INFO: Record<
   sessions: { label: "Workouts", unit: "workouts", hint: "Workouts logged on the Training page", icon: Dumbbell, defaultTarget: 10 },
 };
 
+export const FRIENDS_PATH = "/dashboard/friends";
+
 export function FieldError({ message }: { message?: string }) {
   if (!message) return null;
   return (

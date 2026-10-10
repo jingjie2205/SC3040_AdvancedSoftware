@@ -1,10 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Flame, Medal, Sparkles, Trophy } from "lucide-react";
 import { gamificationApi } from "@/lib/gamification/api";
 import type { Leaderboard, LeaderboardMetric } from "@/lib/gamification/types";
-import { CardHeader, ErrorBox, Loading, Segmented, cardClass, displayName } from "./ui";
+import { CardHeader, ErrorBox, FRIENDS_PATH, Loading, Segmented, cardClass, displayName } from "./ui";
 
 const METRICS = [
   { value: "xp", label: "XP", icon: Sparkles },
@@ -51,7 +52,7 @@ export function LeaderboardPanel({ refreshKey }: { refreshKey: number }) {
   return (
     <div className={cardClass}>
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <CardHeader title="Leaderboard" subtitle="See how you stack up" />
+        <CardHeader title="Leaderboard" subtitle="You and your friends" />
         <Segmented label="Rank by" value={metric} options={[...METRICS]} onChange={setMetric} />
       </div>
 
@@ -62,7 +63,7 @@ export function LeaderboardPanel({ refreshKey }: { refreshKey: number }) {
       ) : board.entries.length === 0 ? (
         <p className="rounded-xl border border-dashed border-slate-700 p-6 text-center text-xs text-slate-400">
           {metric === "streak"
-            ? "No active streaks right now. Check in to start one."
+            ? "No active streaks among you and your friends. Check in to start one."
             : "No one has earned XP yet. Check in to get on the board."}
         </p>
       ) : (
@@ -92,6 +93,16 @@ export function LeaderboardPanel({ refreshKey }: { refreshKey: number }) {
             </li>
           ))}
         </ol>
+      )}
+
+      {board && !board.entries.some((e) => !e.isCurrentUser) && (
+        <p className="mt-4 text-center text-xs text-slate-400">
+          Only friends appear here.{" "}
+          <Link href={FRIENDS_PATH} className="font-semibold text-emerald-400 hover:underline">
+            Add friends
+          </Link>{" "}
+          to compete with them.
+        </p>
       )}
     </div>
   );

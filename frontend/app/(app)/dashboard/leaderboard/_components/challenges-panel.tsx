@@ -196,7 +196,7 @@ export function ChallengesPanel({ refreshKey }: { refreshKey: number }) {
   return (
     <div className={cardClass}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <CardHeader title="Challenges" subtitle="Set a goal and race other athletes to it" />
+        <CardHeader title="Challenges" subtitle="Set a goal and race your friends to it" />
         {!creating && (
           <button type="button" onClick={() => setCreating(true)} className={`${btnPrimary} mb-5 w-fit`}>
             <Plus className="h-3.5 w-3.5" aria-hidden="true" />

@@ -187,12 +187,27 @@ def _display_names(supabase: Client, user_ids: Iterable[str]) -> dict:
     return {row["user_id"]: row["name"] for row in rows if row.get("name")}
 
 
+def friend_ids(supabase: Client, user_id: str) -> list:
+    """Users with an accepted friend request to or from user_id (the friends feature's table)."""
+    sent = (
+        supabase.table("friend_requests").select("recipient_id").eq("sender_id", user_id)
+        .eq("status", "accepted").execute().data or []
+    )
+    received = (
+        supabase.table("friend_requests").select("sender_id").eq("recipient_id", user_id)
+        .eq("status", "accepted").execute().data or []
+    )
+    return [r["recipient_id"] for r in sent] + [r["sender_id"] for r in received]
+
+
 def get_leaderboard(
     supabase: Client, user_id: str, metric: LeaderboardMetric, limit: int, today: date
 ) -> list:
+    """The user and their friends. On the XP board, anyone who hasn't earned XP yet shows with 0."""
+    members = list(dict.fromkeys([user_id, *friend_ids(supabase, user_id)]))
     query = supabase.table("gamification_user_stats").select(
         "user_id,total_xp,current_streak,last_check_in_date"
-    )
+    ).in_("user_id", members)
     if metric == LeaderboardMetric.STREAK:
         # Only streaks still alive (checked in today or yesterday) can be ranked by stored value
         query = query.gte("last_check_in_date", (today - timedelta(days=1)).isoformat()).order(
@@ -200,7 +215,15 @@ def get_leaderboard(
         )
     else:
         query = query.order("total_xp", desc=True)
-    rows = query.limit(limit).execute().data or []
+    rows = query.execute().data or []
+    if metric == LeaderboardMetric.XP:
+        ranked = {row["user_id"] for row in rows}
+        rows += [
+            {"user_id": uid, "total_xp": 0, "current_streak": 0, "last_check_in_date": None}
+            for uid in members
+            if uid not in ranked
+        ]
+    rows = rows[:limit]
     names = _display_names(supabase, [row["user_id"] for row in rows])
 
     return [
@@ -350,11 +373,13 @@ def list_challenges(supabase: Client, user_id: str, today: date) -> list:
 def create_challenge(supabase: Client, user_id: str, data: dict, today: date) -> dict:
     """Creates a challenge with the creator already accepted and everyone else invited.
 
-    Raises InvalidChallengeError if it starts in the past or an invitee doesn't exist.
+    Raises InvalidChallengeError if it starts in the past or an invitee isn't one of the user's friends.
     """
     if data["startDate"] < today:
         raise InvalidChallengeError("A challenge can't start in the past")
     invitees = list(dict.fromkeys(str(i) for i in data["inviteeIds"] if str(i) != user_id))
+    if not set(invitees) <= set(friend_ids(supabase, user_id)):
+        raise InvalidChallengeError("You can only invite your friends")
 
     challenge = supabase.table("challenges").insert(
         {
