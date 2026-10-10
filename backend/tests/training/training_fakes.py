@@ -231,8 +231,11 @@ class FilteringQuery:
         self.max_rows = count
         return self
 
-    def upsert(self, row, on_conflict=None):
-        self.operation, self.payload, self.on_conflict = "upsert", dict(row), on_conflict
+    def upsert(self, row, on_conflict=None, ignore_duplicates=False):
+        # PostgREST takes one row or a list of them; "ignore duplicates" leaves a clashing row exactly as it was
+        payload = [dict(r) for r in row] if isinstance(row, list) else dict(row)
+        self.operation, self.payload, self.on_conflict = "upsert", payload, on_conflict
+        self.ignore_duplicates = ignore_duplicates
         return self
 
     def insert(self, row):
@@ -268,13 +271,16 @@ class FilteringQuery:
             return SimpleNamespace(data=[dict(self.payload)])
         if self.operation == "upsert":
             keys = [c.strip() for c in (self.on_conflict or "").split(",") if c.strip()]
-            for existing in stored:
-                if keys and all(existing.get(k) == self.payload.get(k) for k in keys):
-                    existing.update(self.payload)
-                    break
-            else:
-                stored.append(dict(self.payload))
-            return SimpleNamespace(data=[dict(self.payload)])
+            incoming = self.payload if isinstance(self.payload, list) else [self.payload]
+            for row in incoming:
+                for existing in stored:
+                    if keys and all(existing.get(k) == row.get(k) for k in keys):
+                        if not getattr(self, "ignore_duplicates", False):
+                            existing.update(row)
+                        break
+                else:
+                    stored.append(dict(row))
+            return SimpleNamespace(data=[dict(row) for row in incoming])
         if self.operation == "delete":
             doomed = self._matching([dict(r) for r in stored])
             stored[:] = [r for r in stored if r not in doomed]

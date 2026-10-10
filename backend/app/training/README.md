@@ -25,6 +25,10 @@ local date as `X-Client-Date: YYYY-MM-DD` so "today" matches theirs (the server 
 | POST | `/training/sessions/{id}/respond` | T-4 accept / swap / skip |
 | POST | `/training/sessions/{id}/log` | T-5 log a planned session |
 | POST | `/training/sessions` | T-5 log an ad hoc session |
+| GET | `/training/strava/status` | The Strava tab: whether Strava is connected, and how many activities from it are on the schedule. No call to Strava |
+| POST | `/training/strava/pull` | "Upload Strava data": the latest 100 Strava activities as cards, newest first, each saying how it would be saved and whether it already is. Saves nothing. 409 `NOT_CONNECTED`, 429, 503 |
+| POST | `/training/strava/save` | "Save to schedule" `{stravaIds}` (1 to 100): saves those activities as training logs (`source = 'strava'`). Asks Strava again, so what is saved is what Strava said. Safe to repeat. Answers `{savedIds, alreadySaved, skipped}` |
+| DELETE | `/training/strava/logs` | Take every Strava-sourced log off the schedule. The athlete's own logs stay |
 | POST | `/readiness/score` | Features in, score + classification + factors out. Stateless |
 | GET | `/readiness/model` | Which scorer is live (trained model or rules), what it was trained on, and why if it fell back. No user data |
 
@@ -46,6 +50,7 @@ failures use the same shape (status 422), including request-body validation on t
 | `repository.py` | Supabase access and the `ChangeSet` applied in one transaction |
 | `clock.py` | The client-date header ("today" as the user sees it) |
 | `router.py` | Routes, plus `install(app)` |
+| `strava_sync.py`, `strava_router.py` | Activities pulled from Strava as cards and saved to the schedule as `source = 'strava'` logs. The only code here that touches Strava or writes such a log, and nothing else imports them except the installer in `__init__.py` (see "The Strava tab") |
 
 ## Turning it on against a real Supabase project
 
@@ -63,8 +68,9 @@ failures use the same shape (status 422), including request-body validation on t
    select proname from pg_proc where proname = 'training_apply_changes';
    -- expect no rows
    ```
-2. **Apply the two migrations, in order**, in the Supabase SQL editor (or `supabase db push`). They need
-   only `auth.users` and touch no other feature's table.
+2. **Apply the migrations, in order**, in the Supabase SQL editor (or `supabase db push`). The first three need
+   only `auth.users` and touch no other feature's table; the fourth is for a project that also has the
+   gamification migrations.
    - `supabase/migrations/20260930000000_training_routine.sql` creates the five training tables and the
      write function. A script runs as one transaction, so an error changes nothing, but it is **not safe
      to run twice** (the `create policy` lines have no `if not exists`).
@@ -73,10 +79,23 @@ failures use the same shape (status 422), including request-body validation on t
      plans carry their goal, and takes the write privileges on all six tables away from signed-in and
      signed-out users. It **is safe to run again**; running it again also closes anything opened up in
      the meantime.
+   - `supabase/migrations/20261010100000_training_strava_logs.sql` adds one nullable column to
+     `training_workout_logs`, `external_id` (the Strava activity a log came from), a unique index on
+     `(user_id, source, external_id)` so an activity can be saved once, and a check that a `strava` log always
+     names its activity. It **is safe to run again**, changes no existing row and touches no other table.
+   - `supabase/migrations/20261011100000_gamification_skip_strava_xp.sql` (run after the gamification
+     migrations, the last of which is `20261011000000_gamification_pending_xp.sql`) replaces the gamification
+     trigger function `gamification_award_logged_activity()` with its current body plus one early return for
+     `source = 'strava'`. Without it, the trigger on `training_workout_logs` pays 50 XP for every row inserted,
+     so each saved Strava activity would earn 50 XP (and "Save all" up to 5,000, again after every removal, and
+     challenge progress with it). It **is safe to run again**, and it is the one change here to another
+     owner's code, flagged to Yew Yi in the PR that added it. It leaves existing XP alone.
 
    The backend copes with a database that hasn't had the second one yet (preferences save without exam
-   dates, sleep reads as missing, plans save without a goal), but logging sleep then answers 503 with a
-   message saying to apply it.
+   dates, sleep reads as missing, plans save without a goal), but logging sleep or saving an exam date then
+   answers 503 with a message saying to apply it. Saving from the Strava tab answers 503 the same way until the
+   third (pulling and showing cards needs no migration; the schedule just can't hold a Strava log before it).
+   Apply the fourth before anyone saves Strava activities on a project that has the gamification trigger.
 3. **Check it landed.** In the SQL editor:
    ```sql
    select tablename, rowsecurity from pg_tables
@@ -125,7 +144,7 @@ harness isn't part of the repo.
 
 | Rule | Where | Test |
 |---|---|---|
-| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities`. The coach's week minutes go through `modelling_workouts` too | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model), `test_training_coach.py` and `test_training_summary.py` (a Strava row can't reach the prompt or the totals) |
+| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities`. The coach's week minutes go through `modelling_workouts` too. Activities saved from the page's Strava tab are `training_workout_logs` rows flagged `source = 'strava'`, never linked to a planned session and awarded no XP (the gamification trigger skips them, see the fourth migration); only `strava_sync.py` imports Strava code or writes such a row, and the tab's modules and the training API client never import each other. A property test saves 40 Strava logs and checks that the plan, readiness, summary and coach prompts come out identical | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model), `test_training_coach.py` and `test_training_summary.py` (a Strava row can't reach the prompt or the totals), `test_training_strava_isolation.py` (the behaviour above, and the imports), `test_training_strava_sync.py` |
 | 2. Reconciliation is one-directional | `rules.reconcile` | `test_training_rules.py` (all nine band pairs) |
 | 3. Rebaseline on completed sessions | `planner.baseline_from_history` reads logged workouts only | `test_training_planner.py` |
 | 4. Readiness is private | Only the owner's own `GET /today` and `GET /summary`, and the stateless `/readiness/score`, can return it; selects are scoped to the user. The sleep entries and exam dates that feed it are held to the same rule: only the owner's own `GET /today` and `GET /preferences` return them. Nothing that feeds or comes from the score is ever given to Gemini: the coach's facts are built from the plan only, and readiness isn't even computed on its path | `test_training_api.py` walks the OpenAPI schema (exactly three operations carry readiness, and the coach isn't one); `test_training_repository.py`; `test_training_inputs.py`; `test_training_coach.py` (the exact prompt, forbidden words, an exploding scorer, an import guard) |
@@ -234,6 +253,64 @@ data, free text from the user, or any id, email or name. Adding to that list mea
   const note = await trainingApi.getCoachMessage();      // ApiResult<CoachMessage>
   ```
   Without the flag the same calls return fixtures, so the Home card can be built before the backend is running.
+
+## The Strava tab
+
+The training page's **Strava** tab pulls the athlete's latest activities from Strava, shows each as a card, and
+saves the ones the athlete chooses to their **schedule** as training logs.
+
+1. **Upload Strava data** calls `POST /training/strava/pull`. The server asks Strava for the athlete's latest 100
+   activities through the team's Strava service (which renews an expired access token itself) and answers with
+   one card each: name, type, day and time, distance, moving time, climb, average heart rate and, for the
+   activities the schedule can hold, how they would be saved (type, minutes, points). **Nothing is saved yet.**
+   Opening the tab only asks `GET /training/strava/status` (our own database), so Strava is asked when the athlete
+   presses the button and not before.
+2. **Save to schedule** on a card, or **Save all to schedule**, calls `POST /training/strava/save` with the
+   activity ids. The server asks Strava again and saves what Strava says about those ids, never what a browser
+   sends, so a forged duration can't be saved. Each becomes a `training_workout_logs` row with `source = 'strava'`
+   and `external_id` = the Strava activity id. Saving the same activity twice does nothing (a unique index on
+   `(user_id, source, external_id)` and "ignore duplicates"), and the answer counts the ones saved, the ones that
+   were already there and the ones skipped (no longer among Strava's latest, or with nowhere to go).
+3. The log then shows on the **Schedule** tab, marked "From Strava" with a "View on Strava" link.
+4. **Remove saved activities** (`DELETE /training/strava/logs`) takes every Strava-sourced log off again. The
+   athlete's own logs are never touched. Disconnecting Strava in Settings clears the connection but not the saved
+   logs (that route is the team's); the tab says so and offers the removal.
+
+- **How an activity is saved.** The schedule holds four kinds of training, so only those can be saved: `Run`,
+  `TrailRun` and `VirtualRun` are a run; `Ride`, `VirtualRide`, `EBikeRide`, `MountainBikeRide`,
+  `EMountainBikeRide` and `GravelRide` are cycling; `WeightTraining` is gym; `Workout`, `Crossfit` and
+  `HighIntensityIntervalTraining` are bodyweight. Walks, swims, hikes, yoga and the rest are listed, with a note
+  that they can't be saved. The duration is the moving time rounded to the minute (at most 600). **Points** are
+  the schedule's own load unit, which has no fixed link to minutes; a Strava log gets 1 point per minute
+  (`config.TrainingRules.strava_points_per_minute`), capped at the volume limit. Average heart rate is kept only
+  when it is a believable number (30 to 230). Distance, pace, climb, the name and the route are **not** kept: a
+  card shows them, the log doesn't. The date is the day it happened where the athlete was.
+- **Hard Rule 1 still holds: a Strava log is shown on the schedule and counts towards nothing else.** It is
+  flagged `source = 'strava'` and every calculation drops those rows before it counts anything: the readiness
+  features (`readiness.build_features`), the plan baseline and adaptation (`planner.modelling_workouts`), the
+  summary and the coach (which use `modelling_workouts` too). It is never linked to a planned session, so it
+  can't mark one done, and saving it awards no XP: the training routes don't call the XP code for it, and the
+  database trigger that pays XP for rows inserted into `training_workout_logs` skips `source = 'strava'` since
+  the fourth migration. `test_training_strava_isolation.py` fails if a later migration redefines that function
+  without the guard. The schedule is the only place that reads them back. `test_training_strava_isolation.py`
+  proves it by behaviour (40 saved Strava logs change nothing the plan, readiness, summary or coach say, the
+  schedule still shows them, and one never completes a session) and by imports (only `strava_sync.py` and its
+  router touch Strava code or write a Strava log; the tab's frontend files import a short fixed list and never
+  the training API client). If the rule is ever relaxed, that is a decision to amend the rule first.
+- **Failures:** not connected is a 409 `NOT_CONNECTED`; Strava refusing the saved connection (revoked access) is
+  the same with a message that points to Settings; a rate limit is a 429; an outage or a reply that isn't what
+  Strava documents is a 503. Nothing is saved when Strava failed. A database without the third migration is a 503
+  on save that says to apply it. Every save asks Strava once (one request for the latest 100), so pressing
+  "Save to schedule" on many cards one by one uses more of Strava's rate limit than one "Save all".
+- **Not connected:** the tab shows "Connect Strava", a link to Strava's consent page built from
+  `NEXT_PUBLIC_STRAVA_CLIENT_ID` and `NEXT_PUBLIC_STRAVA_REDIRECT_URI`, with `state=training`. Once the athlete
+  allows it, Strava sends them to `frontend/app/api/auth/callback/route.ts`, which swaps the code for tokens
+  through `POST /strava/exchange` (stored on the user's row) and returns to the tab with a notice. With no
+  `state` it returns to Settings, as it always did. That route had been deleted from `main`; it is back.
+- **Where the code is:** `strava_sync.py` and `strava_router.py` here; `lib/training/strava.ts` (the requests and
+  the connect link), `lib/training/strava-format.ts` (plain functions that read and word the answers) and
+  `_components/strava-panel.tsx` on the page; the schedule's "From Strava" badge is in `schedule-panel.tsx`.
+- Like the rest of the page's live data, the tab needs `NEXT_PUBLIC_TRAINING_API=http` and a signed-in user.
 
 ## Not built yet, and who it depends on
 

@@ -122,6 +122,8 @@ class WorkoutSession(ApiModel):
     avg_hr: Optional[int] = None
     calories: Optional[int] = None
     source: WorkoutSource = "manual"
+    # For a log saved from Strava, the id of the Strava activity it came from; None for everything else.
+    external_id: Optional[str] = None
     created_at: datetime
 
 

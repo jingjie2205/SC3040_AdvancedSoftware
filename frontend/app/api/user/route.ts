@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL;
+
 export async function GET() {
   const supabase = await createClient();
 
@@ -13,7 +15,7 @@ export async function GET() {
       return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    const response = await fetch('http://localhost:8000/users/me', {
+    const response = await fetch(`${API_URL}/users/me`, {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${session.access_token}`,
@@ -48,7 +50,7 @@ export async function PUT(req: Request) {
 
     const body = await req.json();
 
-    const response = await fetch('http://localhost:8000/users/me', {
+    const response = await fetch(`${API_URL}/users/me`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',

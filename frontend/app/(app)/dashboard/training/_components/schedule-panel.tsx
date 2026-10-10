@@ -68,10 +68,21 @@ function groupByDay(schedule: Schedule): Map<string, DayEntry[]> {
   return days;
 }
 
+/** A log saved from the Strava tab. It is shown here and counts towards nothing else (Hard Rule 1). */
+function isFromStrava(workout: WorkoutSession | null): boolean {
+  return workout?.source === "strava";
+}
+
+/** Strava's activity page for a log, or null when the log has no usable Strava id. */
+function stravaLink(workout: WorkoutSession | null): string | null {
+  const id = workout?.externalId;
+  return id && /^\d+$/.test(id) ? `https://www.strava.com/activities/${id}` : null;
+}
+
 function entryLabel(date: string, entry: DayEntry): string {
   if (!entry.session) {
     const type = entry.workout ? ACTIVITY_LABEL[entry.workout.activityType] : "Workout";
-    return `${formatDay(date)}: ${type}, ad hoc, completed`;
+    return `${formatDay(date)}: ${type}, ${isFromStrava(entry.workout) ? "from Strava" : "ad hoc"}, completed`;
   }
   const { session } = entry;
   return `${formatDay(date)}: ${ACTIVITY_LABEL[session.activityType]}, ${session.intensityBand}, ${STATUS_META[session.status].label.toLowerCase()}`;
@@ -418,7 +429,11 @@ function EntryChip({ date, entry, compact }: { date: string; entry: DayEntry; co
           <span className="truncate">{ACTIVITY_LABEL[type]}</span>
         </span>
         <span className="block truncate text-[10px] opacity-90">
-          {entry.session ? `${meta.label} · ${entry.session.targetDurationMin} min` : "Ad hoc · logged"}
+          {entry.session
+            ? `${meta.label} · ${entry.session.targetDurationMin} min`
+            : isFromStrava(entry.workout)
+              ? "Strava · logged"
+              : "Ad hoc · logged"}
         </span>
       </span>
     </span>
@@ -466,6 +481,8 @@ function DetailRow({
   const { session, workout } = entry;
 
   if (!session) {
+    const fromStrava = isFromStrava(workout);
+    const link = stravaLink(workout);
     return (
       <li className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
         <div className="flex flex-wrap items-center gap-3 text-sm text-white">
@@ -474,9 +491,30 @@ function DetailRow({
             <ActivityIcon type={workout?.activityType ?? "run"} className="h-4 w-4 text-emerald-400" />
             {workout ? ACTIVITY_LABEL[workout.activityType] : "Workout"}
           </span>
-          <span className="text-xs text-slate-400">Ad hoc session</span>
+          {fromStrava ? (
+            <span className="rounded-full border border-[#FC4C02]/30 bg-[#FC4C02]/10 px-2 py-0.5 text-[10px] font-bold text-[#FC4C02]">
+              From Strava
+            </span>
+          ) : (
+            <span className="text-xs text-slate-400">Ad hoc session</span>
+          )}
         </div>
         {workout && <WorkoutSummary workout={workout} />}
+        {fromStrava && (
+          <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+            <span>Shown for reference. It doesn&apos;t complete a planned session or change your plan or readiness.</span>
+            {link && (
+              <a
+                href={link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold text-[#FC4C02] hover:underline"
+              >
+                View on Strava
+              </a>
+            )}
+          </p>
+        )}
       </li>
     );
   }
