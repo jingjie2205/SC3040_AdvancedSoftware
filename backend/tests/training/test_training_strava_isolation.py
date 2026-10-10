@@ -318,3 +318,61 @@ def test_the_checks_notice_each_kind_of_import(tmp_path):
     )
     assert modules(sample, types=False) == {"./one", "./two", "./four", "./five"}
     assert modules(sample, types=True) == {"./three"}
+
+
+# ------------------------------------------------------------------ the database
+
+# The gamification code pays 50 XP from a trigger on training_workout_logs for every row inserted, whatever its
+# source. A saved Strava activity is shown on the schedule and isn't a workout the athlete logged, so the function
+# behind that trigger has to skip it, or "Save all" pays up to 5,000 XP and saving again pays again. The behaviour
+# was rehearsed on a throwaway Postgres loaded with the real migrations; this keeps a later migration from quietly
+# putting the function back the way it was.
+MIGRATIONS = REPO / "supabase" / "migrations"
+XP_TRIGGER_FUNCTION = re.compile(
+    r"CREATE OR REPLACE FUNCTION public\.gamification_award_logged_activity\(\).*?\n\$\$;", re.S | re.I
+)
+STRAVA_XP_GUARD = re.compile(r"IF\s+NEW\.source\s*=\s*'strava'\s+THEN\s+RETURN\s+NEW;\s+END\s+IF;", re.I)
+WORKOUT_GETS_AN_AMOUNT = re.compile(r"item_source\s*:=\s*'workout'", re.I)
+
+migrations_present = pytest.mark.skipif(not MIGRATIONS.exists(), reason="migrations not present")
+
+
+def newest_xp_trigger_definition() -> tuple:
+    """(file name, text) of the last migration, in the order a fresh install runs them, that defines the function."""
+    found = [
+        (path.name, match.group(0))
+        for path in sorted(MIGRATIONS.glob("*.sql"))
+        for match in XP_TRIGGER_FUNCTION.finditer(path.read_text(encoding="utf-8"))
+    ]
+    assert found, "no migration defines gamification_award_logged_activity() any more: update this check"
+    return found[-1]
+
+
+def pays_nothing_for_strava(definition: str) -> bool:
+    """The guard is there, and it comes before the workout is given an amount to earn."""
+    guard, amount = STRAVA_XP_GUARD.search(definition), WORKOUT_GETS_AN_AMOUNT.search(definition)
+    return bool(guard and amount and guard.start() < amount.start())
+
+
+@migrations_present
+def test_the_newest_definition_of_the_workout_xp_trigger_pays_nothing_for_a_strava_log():
+    name, definition = newest_xp_trigger_definition()
+    assert pays_nothing_for_strava(definition), (
+        f"{name} defines gamification_award_logged_activity() without the early return for source = 'strava'. "
+        "Saved Strava activities would earn 50 XP each. Keep the guard from 20261011100000_gamification_skip_strava_xp.sql"
+    )
+
+
+def test_the_xp_guard_check_notices_a_missing_misplaced_or_wrong_guard():
+    guarded = (
+        "IF TG_TABLE_NAME = 'training_workout_logs' THEN\n"
+        "    IF NEW.source = 'strava' THEN\n        RETURN NEW;\n    END IF;\n"
+        "    item_source := 'workout'; item_id := NEW.id; item_amount := 50;\n"
+        "END IF;"
+    )
+    assert pays_nothing_for_strava(guarded)
+    assert not pays_nothing_for_strava(guarded.replace("IF NEW.source = 'strava' THEN\n        RETURN NEW;\n    END IF;", ""))
+    assert not pays_nothing_for_strava(guarded.replace("'strava'", "'manual'"))
+    assert not pays_nothing_for_strava(
+        "item_source := 'workout';\nIF NEW.source = 'strava' THEN RETURN NEW; END IF;"
+    ), "a guard after the workout is given an amount protects nothing"

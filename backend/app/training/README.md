@@ -68,8 +68,9 @@ failures use the same shape (status 422), including request-body validation on t
    select proname from pg_proc where proname = 'training_apply_changes';
    -- expect no rows
    ```
-2. **Apply the three migrations, in order**, in the Supabase SQL editor (or `supabase db push`). They need
-   only `auth.users` and touch no other feature's table.
+2. **Apply the migrations, in order**, in the Supabase SQL editor (or `supabase db push`). The first three need
+   only `auth.users` and touch no other feature's table; the fourth is for a project that also has the
+   gamification migrations.
    - `supabase/migrations/20260930000000_training_routine.sql` creates the five training tables and the
      write function. A script runs as one transaction, so an error changes nothing, but it is **not safe
      to run twice** (the `create policy` lines have no `if not exists`).
@@ -82,11 +83,19 @@ failures use the same shape (status 422), including request-body validation on t
      `training_workout_logs`, `external_id` (the Strava activity a log came from), a unique index on
      `(user_id, source, external_id)` so an activity can be saved once, and a check that a `strava` log always
      names its activity. It **is safe to run again**, changes no existing row and touches no other table.
+   - `supabase/migrations/20261011100000_gamification_skip_strava_xp.sql` (run after the gamification
+     migrations, the last of which is `20261011000000_gamification_pending_xp.sql`) replaces the gamification
+     trigger function `gamification_award_logged_activity()` with its current body plus one early return for
+     `source = 'strava'`. Without it, the trigger on `training_workout_logs` pays 50 XP for every row inserted,
+     so each saved Strava activity would earn 50 XP (and "Save all" up to 5,000, again after every removal, and
+     challenge progress with it). It **is safe to run again**, and it is the one change here to another
+     owner's code, flagged to Yew Yi in the PR that added it. It leaves existing XP alone.
 
    The backend copes with a database that hasn't had the second one yet (preferences save without exam
    dates, sleep reads as missing, plans save without a goal), but logging sleep or saving an exam date then
    answers 503 with a message saying to apply it. Saving from the Strava tab answers 503 the same way until the
    third (pulling and showing cards needs no migration; the schedule just can't hold a Strava log before it).
+   Apply the fourth before anyone saves Strava activities on a project that has the gamification trigger.
 3. **Check it landed.** In the SQL editor:
    ```sql
    select tablename, rowsecurity from pg_tables
@@ -135,7 +144,7 @@ harness isn't part of the repo.
 
 | Rule | Where | Test |
 |---|---|---|
-| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities`. The coach's week minutes go through `modelling_workouts` too. Activities saved from the page's Strava tab are `training_workout_logs` rows flagged `source = 'strava'`, never linked to a planned session and awarded no XP; only `strava_sync.py` imports Strava code or writes such a row, and the tab's modules and the training API client never import each other. A property test saves 40 Strava logs and checks that the plan, readiness, summary and coach prompts come out identical | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model), `test_training_coach.py` and `test_training_summary.py` (a Strava row can't reach the prompt or the totals), `test_training_strava_isolation.py` (the behaviour above, and the imports), `test_training_strava_sync.py` |
+| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities`. The coach's week minutes go through `modelling_workouts` too. Activities saved from the page's Strava tab are `training_workout_logs` rows flagged `source = 'strava'`, never linked to a planned session and awarded no XP (the gamification trigger skips them, see the fourth migration); only `strava_sync.py` imports Strava code or writes such a row, and the tab's modules and the training API client never import each other. A property test saves 40 Strava logs and checks that the plan, readiness, summary and coach prompts come out identical | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model), `test_training_coach.py` and `test_training_summary.py` (a Strava row can't reach the prompt or the totals), `test_training_strava_isolation.py` (the behaviour above, and the imports), `test_training_strava_sync.py` |
 | 2. Reconciliation is one-directional | `rules.reconcile` | `test_training_rules.py` (all nine band pairs) |
 | 3. Rebaseline on completed sessions | `planner.baseline_from_history` reads logged workouts only | `test_training_planner.py` |
 | 4. Readiness is private | Only the owner's own `GET /today` and `GET /summary`, and the stateless `/readiness/score`, can return it; selects are scoped to the user. The sleep entries and exam dates that feed it are held to the same rule: only the owner's own `GET /today` and `GET /preferences` return them. Nothing that feeds or comes from the score is ever given to Gemini: the coach's facts are built from the plan only, and readiness isn't even computed on its path | `test_training_api.py` walks the OpenAPI schema (exactly three operations carry readiness, and the coach isn't one); `test_training_repository.py`; `test_training_inputs.py`; `test_training_coach.py` (the exact prompt, forbidden words, an exploding scorer, an import guard) |
@@ -280,8 +289,10 @@ saves the ones the athlete chooses to their **schedule** as training logs.
   flagged `source = 'strava'` and every calculation drops those rows before it counts anything: the readiness
   features (`readiness.build_features`), the plan baseline and adaptation (`planner.modelling_workouts`), the
   summary and the coach (which use `modelling_workouts` too). It is never linked to a planned session, so it
-  can't mark one done, and saving it awards no XP (XP is only given when a workout is logged through the
-  training routes). The schedule is the only place that reads them back. `test_training_strava_isolation.py`
+  can't mark one done, and saving it awards no XP: the training routes don't call the XP code for it, and the
+  database trigger that pays XP for rows inserted into `training_workout_logs` skips `source = 'strava'` since
+  the fourth migration. `test_training_strava_isolation.py` fails if a later migration redefines that function
+  without the guard. The schedule is the only place that reads them back. `test_training_strava_isolation.py`
   proves it by behaviour (40 saved Strava logs change nothing the plan, readiness, summary or coach say, the
   schedule still shows them, and one never completes a session) and by imports (only `strava_sync.py` and its
   router touch Strava code or write a Strava log; the tab's frontend files import a short fixed list and never
