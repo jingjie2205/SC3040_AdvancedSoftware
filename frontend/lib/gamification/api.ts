@@ -16,6 +16,8 @@ import type {
   GamificationStats,
   Leaderboard,
   LeaderboardMetric,
+  PendingXp,
+  PendingXpResync,
   XpEvent,
 } from "./types";
 
@@ -38,6 +40,8 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: ApiError 
 export interface GamificationApi {
   getStats(): Promise<GamificationStats>;
   getXpHistory(): Promise<XpEvent[]>;
+  getPendingXp(): Promise<PendingXp>;
+  resyncPendingXp(): Promise<ApiResult<PendingXpResync>>;
   checkIn(input: CheckInInput): Promise<ApiResult<CheckInResult>>;
   getLeaderboard(metric: LeaderboardMetric): Promise<Leaderboard>;
   getChallenges(): Promise<Challenge[]>;

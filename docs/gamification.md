@@ -28,6 +28,17 @@ triggers hard-code the workout and meal amounts. Change all three together.
 Every award is a row in `xp_events`. The same `(user, source, source_id)` is only ever awarded once, so
 retries and duplicate calls are harmless.
 
+**Pending XP.** Workouts and meals are checked before they earn XP. If the check fails, or recording
+the XP errors, the XP is held in `pending_xp` with a reason, and the page shows an "XP on hold" alert
+with a **Re-sync** button. Re-syncing checks each held item again: it pays the ones that now pass and
+drops the ones whose workout or meal was deleted. While an item is held, nothing else can pay it.
+
+| Held when | Clears when |
+|---|---|
+| A workout is dated after today (the training API takes "today" from the user's device) | That date arrives and the user re-syncs |
+| A meal has no calorie estimate | The meal has calories and the user re-syncs |
+| Recording the XP failed | The user re-syncs and it succeeds |
+
 **Ranks** by total XP: Beginner 0, Bronze 100, Silver 500, Gold 1500, Platinum 4000.
 
 **Streaks**
@@ -66,6 +77,8 @@ Errors are `{"detail": "<message>"}` (validation errors from FastAPI use its usu
 | GET | `/gamification/me` | Total XP, streak, best streak, rank, XP to next rank, `checkedInToday` |
 | POST | `/gamification/checkins` | Today's check-in `{muscleFatigue, mood, dietAdherence}` (1 to 5). 201, or 409 if already checked in today |
 | GET | `/gamification/xp-events` | The 20 most recent XP awards, newest first |
+| GET | `/gamification/pending-xp` | XP on hold, with the reason for each item and the total |
+| POST | `/gamification/pending-xp/resync` | Check held XP again. Returns what was paid (`awardedXp`, `released`), cleared (`removed`) and still held (`stillPending`, `items`) |
 | GET | `/gamification/leaderboard?metric=xp\|streak&limit=1..50` | You and your friends (default 10), plus `friendCount` so the page can show the no-friends screen |
 | GET | `/gamification/challenges` | Challenges you created, joined or are invited to, with everyone's progress. Pays any rewards you've earned |
 | POST | `/gamification/challenges` | Create `{title, metric, targetValue, startDate, endDate, inviteeIds}`. 201, or 422 with a message |
@@ -74,7 +87,7 @@ Errors are `{"detail": "<message>"}` (validation errors from FastAPI use its usu
 
 ## Database
 
-Run these in the Supabase SQL Editor, in order. **All three have already been run on the team
+Run these in the Supabase SQL Editor, in order. **The first three have already been run on the team
 database**, and each is safe to run again.
 
 | Migration | What it does |
@@ -82,6 +95,7 @@ database**, and each is safe to run again.
 | `supabase/migrations/20261009000000_gamification.sql` | Creates `gamification_user_stats`, `daily_checkins`, `xp_events`, `challenges`, `challenge_participants`, with RLS |
 | `supabase/migrations/20261009120000_gamification_xp_sources.sql` | `award_gamification_xp` database function, workout and meal XP triggers (and XP for anything logged earlier), one award per user per source |
 | `supabase/migrations/20261010000000_gamification_merge_checkins.sql` | Copies the old `daily_check_ins` calendar dates into `daily_checkins` and recalculates streaks |
+| `supabase/migrations/20261011000000_gamification_pending_xp.sql` | `pending_xp` table, the checks, holding failed awards, and `resync_gamification_xp` |
 
 | Table | Holds |
 |---|---|
@@ -89,6 +103,7 @@ database**, and each is safe to run again.
 | `daily_checkins` | One row per user per day with the three answers. Answers are blank only for days copied from the old calendar table |
 | `xp_events` | Every XP award. `total_xp` is the sum of these |
 | `challenges`, `challenge_participants` | Challenges and who was invited, with their invite status |
+| `pending_xp` | XP held back from a workout or meal, with the reason |
 
 Things to know:
 
@@ -97,7 +112,8 @@ Things to know:
   themselves XP from the browser.
 - **Two older tables are unused.** `gamification_stats` (from the original team setup, with different
   columns) and `daily_check_ins` (the old calendar table, now copied across). Drop them once the team agrees.
-- **A failed XP award never blocks a workout or meal from saving.** The trigger logs a warning instead.
+- **A failed XP award never blocks a workout or meal from saving.** The trigger holds the XP as pending
+  instead (see Pending XP above).
 
 ## How other features connect
 
@@ -124,7 +140,7 @@ Things to know:
 | `backend/app/controllers/checkin.py` | `/checkin/me/dates` for the calendar |
 | `backend/tests/test_gamification.py` | Tests, using an in-memory stand-in for Supabase |
 | `frontend/app/(app)/dashboard/leaderboard/page.tsx` | The page |
-| `frontend/app/(app)/dashboard/leaderboard/_components/` | Stats, check-in, Recent XP, leaderboard and challenges panels, and the new-challenge form |
+| `frontend/app/(app)/dashboard/leaderboard/_components/` | Stats, check-in, Recent XP, leaderboard and challenges panels, the XP-on-hold alert, and the new-challenge form |
 | `frontend/lib/gamification/` | Types, rules, zod schemas, and the API in two versions: real backend and mock data |
 
 ## Running it locally

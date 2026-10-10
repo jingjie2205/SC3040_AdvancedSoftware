@@ -16,6 +16,7 @@ import type {
   LeaderboardEntry,
   LeaderboardMetric,
   ParticipantStatus,
+  PendingXpItem,
   XpEvent,
   XpSource,
 } from "./types";
@@ -46,6 +47,7 @@ interface MockChallenge {
 let users: MockUser[] | null = null;
 let challenges: MockChallenge[] | null = null;
 let history: XpEvent[] | null = null;
+let pending: PendingXpItem[] | null = null;
 /** Challenges whose reward the current user has already been paid. */
 const rewarded = new Set<string>(["challenge-workouts"]);
 let counter = 0;
@@ -122,6 +124,20 @@ function seedHistory(): XpEvent[] {
     { id: "xp-3", source: "workout", amount: R.workoutXp, createdAt: daysAgoAt(2, 18) },
     { id: "xp-4", source: "challenge", amount: R.challengeRewardXp, createdAt: daysAgoAt(6, 20) },
   ];
+}
+
+function pendingStore(): PendingXpItem[] {
+  pending ??= [
+    {
+      id: "pending-1",
+      source: "meal",
+      sourceId: "meal-without-calories",
+      amount: R.mealXp,
+      reason: "This meal has no calorie estimate. Add its ingredients and re-sync.",
+      createdAt: daysAgoAt(0, 9),
+    },
+  ];
+  return pending;
 }
 
 function historyStore(): XpEvent[] {
@@ -281,6 +297,30 @@ export const mockGamificationApi: GamificationApi = {
   async getXpHistory() {
     await delay();
     return [...historyStore()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20);
+  },
+
+  async getPendingXp() {
+    await delay();
+    const items = [...pendingStore()];
+    return { items, totalXp: items.reduce((sum, item) => sum + item.amount, 0) };
+  },
+
+  // The fixtures treat every held item as fixed by the time the user re-syncs.
+  async resyncPendingXp() {
+    await delay();
+    const released = pendingStore().splice(0);
+    for (const item of released) earn(item.source, item.amount);
+    return {
+      ok: true,
+      data: {
+        items: [],
+        totalXp: 0,
+        awardedXp: released.reduce((sum, item) => sum + item.amount, 0),
+        released: released.length,
+        stillPending: 0,
+        removed: 0,
+      },
+    };
   },
 
   async getChallenges() {

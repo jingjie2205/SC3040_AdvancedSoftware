@@ -48,6 +48,30 @@ export interface XpEvent {
   createdAt: string;
 }
 
+/** XP held back because its workout or meal failed a check; re-syncing checks it again. */
+export interface PendingXpItem {
+  id: string;
+  source: "workout" | "meal";
+  sourceId: string;
+  amount: number;
+  reason: string;
+  createdAt: string;
+}
+
+export interface PendingXp {
+  items: PendingXpItem[];
+  totalXp: number;
+}
+
+export interface PendingXpResync extends PendingXp {
+  /** XP paid by this re-sync. */
+  awardedXp: number;
+  released: number;
+  stillPending: number;
+  /** Held items dropped because their workout or meal was deleted. */
+  removed: number;
+}
+
 export interface Leaderboard {
   metric: LeaderboardMetric;
   /** Accepted friends; 0 means the board can only ever show the user. */

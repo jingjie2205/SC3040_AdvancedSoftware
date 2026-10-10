@@ -153,19 +153,20 @@ class FakeSupabase:
         return FakeQuery(self.db, name)
 
     def rpc(self, name, params):
-        """Mirrors award_gamification_xp in the gamification_xp_sources migration."""
-        assert name == "award_gamification_xp"
-        return SimpleNamespace(execute=lambda: SimpleNamespace(data=self._award(**params)))
+        """Mirrors the database functions in the gamification migrations."""
+        handler = {"award_gamification_xp": self._award, "resync_gamification_xp": self._resync}[name]
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=handler(**params)))
 
     def _award(self, p_user_id, p_source, p_source_id, p_amount):
         events = self.db.setdefault("xp_events", [])
         stats = self.db.setdefault("gamification_user_stats", [])
         row = next((r for r in stats if r["user_id"] == p_user_id), None)
+        key = (p_user_id, p_source, p_source_id)
+        held = any((h["user_id"], h["source"], h["source_id"]) == key for h in self.db.get("pending_xp", []))
         duplicate = p_source_id is not None and any(
-            (e["user_id"], e["source"], e.get("source_id")) == (p_user_id, p_source, p_source_id)
-            for e in events
+            (e["user_id"], e["source"], e.get("source_id")) == key for e in events
         )
-        if duplicate:
+        if held or duplicate:
             return row["total_xp"] if row else 0
         events.append(
             {
@@ -182,6 +183,35 @@ class FakeSupabase:
             stats.append(row)
         row["total_xp"] += p_amount
         return row["total_xp"]
+
+    def _problem(self, source, source_id):
+        """gamification_xp_problem: the day is TODAY rather than the real date in Singapore."""
+        if source == "workout":
+            row = next((r for r in self.db.get("training_workout_logs", []) if r["id"] == source_id), None)
+            if row is None:
+                return "missing"
+            return "dated in the future" if row["date"] > TODAY.isoformat() else None
+        row = next((r for r in self.db.get("meal_plans", []) if r["log_id"] == source_id), None)
+        if row is None:
+            return "missing"
+        return "no calorie estimate" if not row.get("total_calories") else None
+
+    def _resync(self, p_user_id):
+        counts = {"awardedXp": 0, "released": 0, "stillPending": 0, "removed": 0}
+        for item in [h for h in self.db.get("pending_xp", []) if h["user_id"] == p_user_id]:
+            problem = self._problem(item["source"], item["source_id"])
+            if problem == "missing":
+                self.db["pending_xp"].remove(item)
+                counts["removed"] += 1
+            elif problem is None:
+                self.db["pending_xp"].remove(item)
+                self._award(item["user_id"], item["source"], item["source_id"], item["amount"])
+                counts["awardedXp"] += item["amount"]
+                counts["released"] += 1
+            else:
+                item["reason"] = problem
+                counts["stillPending"] += 1
+        return counts
 
 
 METRICS = {"muscleFatigue": 3, "mood": 4, "dietAdherence": 5}
@@ -725,3 +755,83 @@ def test_leaderboard_reports_how_many_friends_the_user_has(client, sb):
     assert svc.get_leaderboard(sb, DAVE, LeaderboardMetric.STREAK, 10, TODAY)["friendCount"] == 0
     board = client.get("/gamification/leaderboard", params={"metric": "streak"}).json()
     assert board["friendCount"] == 2
+
+
+# --- Pending XP (G-2: XP held when an activity fails a check) ----------------
+
+def hold(sb, user_id, source, source_id, amount, reason="held"):
+    """What the database trigger does when a logged workout or meal fails its check."""
+    sb.db.setdefault("pending_xp", []).append(
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "source": source,
+            "source_id": source_id,
+            "amount": amount,
+            "reason": reason,
+            "created_at": AWARDED_AT,
+        }
+    )
+
+
+def test_held_xp_is_listed_with_its_total(sb):
+    hold(sb, ALICE, "meal", str(uuid.uuid4()), 10, "no calorie estimate")
+    hold(sb, ALICE, "workout", str(uuid.uuid4()), 50, "dated in the future")
+    hold(sb, BOB, "meal", str(uuid.uuid4()), 10)
+
+    pending = svc.get_pending_xp(sb, ALICE)
+
+    assert pending["totalXp"] == 60
+    assert [(i["source"], i["reason"]) for i in pending["items"]] == [
+        ("meal", "no calorie estimate"),
+        ("workout", "dated in the future"),
+    ]
+
+
+def test_held_xp_cannot_be_paid_by_a_direct_award(sb):
+    workout = str(uuid.uuid4())
+    hold(sb, ALICE, "workout", workout, 50)
+
+    assert svc.award_xp(sb, ALICE, "workout", 50, workout) == 0
+    assert not sb.db.get("xp_events")
+
+
+def test_resync_pays_fixed_items_drops_deleted_ones_and_keeps_the_rest(sb):
+    fixed_meal, empty_meal, deleted_meal, past_workout, future_workout = (str(uuid.uuid4()) for _ in range(5))
+    sb.db["meal_plans"] = [
+        {"log_id": fixed_meal, "total_calories": 640},
+        {"log_id": empty_meal, "total_calories": None},
+    ]
+    sb.db["training_workout_logs"] = [
+        {"id": past_workout, "date": TODAY.isoformat()},
+        {"id": future_workout, "date": (TODAY + timedelta(days=2)).isoformat()},
+    ]
+    for source, source_id, amount in [
+        ("meal", fixed_meal, 10), ("meal", empty_meal, 10), ("meal", deleted_meal, 10),
+        ("workout", past_workout, 50), ("workout", future_workout, 50),
+    ]:
+        hold(sb, ALICE, source, source_id, amount)
+
+    result = svc.resync_pending_xp(sb, ALICE)
+
+    assert {k: result[k] for k in ("awardedXp", "released", "stillPending", "removed")} == {
+        "awardedXp": 60, "released": 2, "stillPending": 2, "removed": 1,
+    }
+    assert {i["sourceId"] for i in result["items"]} == {empty_meal, future_workout}
+    assert result["totalXp"] == 60
+    assert svc.get_stats(sb, ALICE, TODAY)["totalXp"] == 60
+    assert svc.resync_pending_xp(sb, ALICE)["awardedXp"] == 0
+
+
+def test_pending_xp_endpoints(client, sb):
+    meal = str(uuid.uuid4())
+    sb.db["meal_plans"] = [{"log_id": meal, "total_calories": 0}]
+    hold(sb, ALICE, "meal", meal, 10, "no calorie estimate")
+
+    assert client.get("/gamification/pending-xp").json()["totalXp"] == 10
+
+    sb.db["meal_plans"][0]["total_calories"] = 500
+    synced = client.post("/gamification/pending-xp/resync").json()
+
+    assert synced["awardedXp"] == 10 and synced["items"] == [] and synced["totalXp"] == 0
+    assert client.get("/gamification/me").json()["totalXp"] == 10

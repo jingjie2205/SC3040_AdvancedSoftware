@@ -178,6 +178,32 @@ def get_xp_history(supabase: Client, user_id: str, limit: int = XP_HISTORY_LIMIT
     ]
 
 
+def get_pending_xp(supabase: Client, user_id: str) -> dict:
+    """XP held back because its workout or meal failed a check (see the pending_xp migration)."""
+    rows = (
+        supabase.table("pending_xp").select("id,source,source_id,amount,reason,created_at")
+        .eq("user_id", user_id).order("created_at").execute().data or []
+    )
+    items = [
+        {
+            "id": r["id"],
+            "source": r["source"],
+            "sourceId": r["source_id"],
+            "amount": r["amount"],
+            "reason": r["reason"],
+            "createdAt": r["created_at"],
+        }
+        for r in rows
+    ]
+    return {"items": items, "totalXp": sum(item["amount"] for item in items)}
+
+
+def resync_pending_xp(supabase: Client, user_id: str) -> dict:
+    """Checks every held item again: pays those that now pass, drops those whose activity was deleted."""
+    result = supabase.rpc("resync_gamification_xp", {"p_user_id": user_id}).execute().data
+    return {**result, **get_pending_xp(supabase, user_id)}
+
+
 def _display_names(supabase: Client, user_ids: Iterable[str]) -> dict:
     """Profile names from the team's users table; users without a profile or name are left out."""
     ids = list(set(user_ids))

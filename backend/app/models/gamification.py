@@ -41,6 +41,24 @@ class XpEvent(BaseModel):
 class XpHistoryResponse(BaseModel):
     events: List[XpEvent]
 
+class PendingXpItem(BaseModel):
+    id: str
+    source: str
+    sourceId: str
+    amount: int
+    reason: str
+    createdAt: datetime
+
+class PendingXpResponse(BaseModel):
+    items: List[PendingXpItem]
+    totalXp: int
+
+class PendingXpResyncResponse(PendingXpResponse):
+    awardedXp: int
+    released: int
+    stillPending: int
+    removed: int
+
 # --- Leaderboard ---
 class LeaderboardMetric(str, Enum):
     XP = "xp"
