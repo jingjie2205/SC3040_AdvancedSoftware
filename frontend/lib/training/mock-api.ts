@@ -110,6 +110,7 @@ function seedHistory(endExclusive: string): WorkoutSession[] {
           activityType,
           actualVolume: volume,
           actualDurationMin: Math.round(volume * 1.25),
+          calories: Math.round(volume * 1.25 * 8),
           rpe: 6,
           avgHr: activityType === "gym" ? null : 141,
           source: "manual",
@@ -173,6 +174,7 @@ function seedState(scenario: "active" | "new"): MockState {
         activityType: session.activityType,
         actualVolume: Math.round(session.targetVolume * ratio),
         actualDurationMin: Math.round(session.targetDurationMin * ratio),
+        calories: Math.round(session.targetDurationMin * ratio * 8),
         rpe: session.intensityBand === "push" ? 8 : 5,
         avgHr: session.activityType === "gym" ? null : 148,
         source: "manual",
@@ -715,7 +717,7 @@ export const mockTrainingApi: TrainingApi = {
     const valid = validateLog(input);
     if (!valid.ok) return valid;
 
-    const workout = makeWorkout({ plannedSessionId: session.id, ...valid.data, source: "manual" });
+    const workout = makeWorkout({ plannedSessionId: session.id, ...valid.data, source: "manual", calories: valid.data.actualDurationMin * 8 });
     s.workouts.push(workout);
     session.status =
       workout.actualVolume >= R.partialCompletionRatio * session.targetVolume
@@ -753,7 +755,12 @@ export const mockTrainingApi: TrainingApi = {
     await delay();
     const valid = validateLog(input);
     if (!valid.ok) return valid;
-    const workout = makeWorkout({ plannedSessionId: null, ...valid.data, source: "manual" });
+    const workout = makeWorkout({
+      plannedSessionId: null,
+      ...valid.data,
+      calories: valid.data.actualDurationMin * 8,
+      source: "manual",
+    });
     getState().workouts.push(workout);
     const result: LogResult = { workout, session: null };
     return ok(result);
