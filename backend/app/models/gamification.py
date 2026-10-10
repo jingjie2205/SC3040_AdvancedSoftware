@@ -63,6 +63,7 @@ class PendingXpResyncResponse(PendingXpResponse):
 class LeaderboardMetric(str, Enum):
     XP = "xp"
     STREAK = "streak"
+    MILEAGE = "mileage"
 
 class LeaderboardEntry(BaseModel):
     position: int
@@ -70,6 +71,8 @@ class LeaderboardEntry(BaseModel):
     displayName: Optional[str] = None
     totalXp: int
     currentStreak: int
+    # Running distance in the last 30 days; only filled in on the mileage board, 0 otherwise
+    mileageKm: float = 0
     rank: str
     isCurrentUser: bool
 

@@ -835,3 +835,48 @@ def test_pending_xp_endpoints(client, sb):
 
     assert synced["awardedXp"] == 10 and synced["items"] == [] and synced["totalXp"] == 0
     assert client.get("/gamification/me").json()["totalXp"] == 10
+
+
+# --- Mileage leaderboard (runs saved from Strava) -----------------------------
+
+def log_run(sb, user_id, km, day=TODAY, activity_type="run", source="strava"):
+    sb.db.setdefault("training_workout_logs", []).append(
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "date": day.isoformat(),
+            "activity_type": activity_type,
+            "source": source,
+            "distance_m": None if km is None else km * 1000,
+        }
+    )
+
+
+def test_mileage_ranks_running_km_over_the_last_30_days(sb):
+    log_run(sb, BOB, 10.3)
+    log_run(sb, BOB, 5, day=TODAY - timedelta(days=29))
+    log_run(sb, BOB, 42, day=TODAY - timedelta(days=30))  # one day too old
+    log_run(sb, ALICE, 8)
+    log_run(sb, ALICE, 50, activity_type="cycling")  # rides aren't running mileage
+    log_run(sb, ALICE, None, source="manual")  # manual logs have no distance
+    log_run(sb, DAVE, 100)  # not a friend
+
+    entries = svc.get_leaderboard(sb, ALICE, LeaderboardMetric.MILEAGE, 10, TODAY)["entries"]
+
+    assert [(e["userId"], e["mileageKm"]) for e in entries] == [(BOB, 15.3), (ALICE, 8.0), (CAROL, 0.0)]
+    assert [e["position"] for e in entries] == [1, 2, 3]
+
+
+def test_other_boards_leave_mileage_at_zero(sb):
+    log_run(sb, ALICE, 12)
+    entries = svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)["entries"]
+    assert {e["mileageKm"] for e in entries} == {0.0}
+
+
+def test_mileage_endpoint(client, sb):
+    log_run(sb, CAROL, 21.1)
+
+    board = client.get("/gamification/leaderboard", params={"metric": "mileage"}).json()
+
+    assert board["metric"] == "mileage"
+    assert board["entries"][0]["userId"] == CAROL and board["entries"][0]["mileageKm"] == 21.1

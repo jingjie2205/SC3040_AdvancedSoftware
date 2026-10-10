@@ -30,6 +30,7 @@ interface MockUser {
   currentStreak: number;
   longestStreak: number;
   lastCheckInDate: string | null;
+  mileageKm: number;
 }
 
 /** Progress is stored directly here; the server derives it from check-ins and XP events. */
@@ -56,11 +57,11 @@ const delay = (ms = 150) => new Promise<void>((resolve) => setTimeout(resolve, m
 
 function seedUsers(): MockUser[] {
   return [
-    { userId: CURRENT_USER, name: null, totalXp: 340, currentStreak: 4, longestStreak: 9, lastCheckInDate: addDaysISO(-1) },
-    { userId: "mock-a1f3", name: "Wei Ling", totalXp: 1620, currentStreak: 12, longestStreak: 21, lastCheckInDate: todayISO() },
-    { userId: "mock-b7c2", name: "Arjun", totalXp: 910, currentStreak: 6, longestStreak: 6, lastCheckInDate: addDaysISO(-1) },
-    { userId: "mock-c0d9", name: null, totalXp: 455, currentStreak: 2, longestStreak: 14, lastCheckInDate: todayISO() },
-    { userId: "mock-d4e8", name: "Siti", totalXp: 120, currentStreak: 3, longestStreak: 3, lastCheckInDate: addDaysISO(-3) },
+    { userId: CURRENT_USER, name: null, totalXp: 340, currentStreak: 4, longestStreak: 9, lastCheckInDate: addDaysISO(-1), mileageKm: 18.4 },
+    { userId: "mock-a1f3", name: "Wei Ling", totalXp: 1620, currentStreak: 12, longestStreak: 21, lastCheckInDate: todayISO(), mileageKm: 42.7 },
+    { userId: "mock-b7c2", name: "Arjun", totalXp: 910, currentStreak: 6, longestStreak: 6, lastCheckInDate: addDaysISO(-1), mileageKm: 9.2 },
+    { userId: "mock-c0d9", name: null, totalXp: 455, currentStreak: 2, longestStreak: 14, lastCheckInDate: todayISO(), mileageKm: 0 },
+    { userId: "mock-d4e8", name: "Siti", totalXp: 120, currentStreak: 3, longestStreak: 3, lastCheckInDate: addDaysISO(-3), mileageKm: 25.1 },
   ];
 }
 
@@ -280,7 +281,9 @@ export const mockGamificationApi: GamificationApi = {
     const candidates =
       metric === "streak"
         ? userStore().filter((u) => liveStreak(u) > 0).sort((a, b) => b.currentStreak - a.currentStreak)
-        : [...userStore()].sort((a, b) => b.totalXp - a.totalXp);
+        : metric === "mileage"
+          ? [...userStore()].sort((a, b) => b.mileageKm - a.mileageKm)
+          : [...userStore()].sort((a, b) => b.totalXp - a.totalXp);
 
     const entries: LeaderboardEntry[] = candidates.slice(0, R.leaderboardLimit).map((u, i) => ({
       position: i + 1,
@@ -288,6 +291,7 @@ export const mockGamificationApi: GamificationApi = {
       displayName: u.name,
       totalXp: u.totalXp,
       currentStreak: liveStreak(u),
+      mileageKm: metric === "mileage" ? u.mileageKm : 0,
       rank: rankFor(u.totalXp).rank,
       isCurrentUser: u.userId === CURRENT_USER,
     }));

@@ -1,6 +1,6 @@
 /** Shapes mirror the Pydantic models in backend/app/models/gamification.py. */
 
-export const LEADERBOARD_METRICS = ["xp", "streak"] as const;
+export const LEADERBOARD_METRICS = ["xp", "streak", "mileage"] as const;
 export type LeaderboardMetric = (typeof LEADERBOARD_METRICS)[number];
 
 export interface GamificationStats {
@@ -34,6 +34,8 @@ export interface LeaderboardEntry {
   displayName: string | null;
   totalXp: number;
   currentStreak: number;
+  /** Km run in the last 30 days, from runs saved from Strava. Only filled in on the mileage board. */
+  mileageKm: number;
   rank: string;
   isCurrentUser: boolean;
 }

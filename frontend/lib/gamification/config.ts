@@ -6,6 +6,7 @@
 export const GAMIFICATION_RULES = {
   checkInScale: { min: 1, max: 5 },
   leaderboardLimit: 10,
+  mileageWindowDays: 30,
   checkInXp: 10,
   streakBonusPerDay: 2,
   streakBonusCapDays: 7,

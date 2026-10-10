@@ -2,15 +2,25 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Flame, Medal, Sparkles, Trophy, UserPlus, Users } from "lucide-react";
+import { Flame, Footprints, Medal, Sparkles, Trophy, UserPlus, Users } from "lucide-react";
 import { gamificationApi } from "@/lib/gamification/api";
-import type { Leaderboard, LeaderboardMetric } from "@/lib/gamification/types";
+import { GAMIFICATION_RULES as R } from "@/lib/gamification/config";
+import type { Leaderboard, LeaderboardEntry, LeaderboardMetric } from "@/lib/gamification/types";
 import { CardHeader, ErrorBox, FRIENDS_PATH, Loading, Segmented, btnPrimary, cardClass, displayName } from "./ui";
 
 const METRICS = [
   { value: "xp", label: "XP", icon: Sparkles },
   { value: "streak", label: "Streak", icon: Flame },
+  { value: "mileage", label: "Mileage", icon: Footprints },
 ] as const;
+
+const TRAINING_PATH = "/dashboard/training";
+
+function score(metric: LeaderboardMetric, entry: LeaderboardEntry): { value: string; unit: string } {
+  if (metric === "xp") return { value: entry.totalXp.toLocaleString(), unit: "XP" };
+  if (metric === "mileage") return { value: entry.mileageKm.toFixed(1), unit: "km" };
+  return { value: String(entry.currentStreak), unit: entry.currentStreak === 1 ? "day" : "days" };
+}
 
 const PODIUM_CLASSES = ["text-amber-300", "text-slate-300", "text-orange-400"];
 
@@ -75,6 +85,16 @@ export function LeaderboardPanel({ refreshKey }: { refreshKey: number }) {
         <Segmented label="Rank by" value={metric} options={[...METRICS]} onChange={setMetric} />
       </div>
 
+      {metric === "mileage" && board && board.friendCount > 0 && (
+        <p className="-mt-2 mb-4 text-[11px] text-slate-400">
+          Runs saved from Strava in the last {R.mileageWindowDays} days.{" "}
+          <Link href={TRAINING_PATH} className="font-semibold text-emerald-400 hover:underline">
+            Save your runs
+          </Link>{" "}
+          on the Training page to count them.
+        </p>
+      )}
+
       {error ? (
         <ErrorBox message={error} onRetry={() => setRetryKey((k) => k + 1)} />
       ) : !board ? (
@@ -106,10 +126,8 @@ export function LeaderboardPanel({ refreshKey }: { refreshKey: number }) {
                 <p className="text-[11px] text-slate-400">{entry.rank}</p>
               </div>
               <p className="text-sm font-bold text-white">
-                {metric === "xp" ? entry.totalXp.toLocaleString() : entry.currentStreak}
-                <span className="ml-1 text-[10px] font-semibold text-slate-400">
-                  {metric === "xp" ? "XP" : entry.currentStreak === 1 ? "day" : "days"}
-                </span>
+                {score(metric, entry).value}
+                <span className="ml-1 text-[10px] font-semibold text-slate-400">{score(metric, entry).unit}</span>
               </p>
             </li>
           ))}

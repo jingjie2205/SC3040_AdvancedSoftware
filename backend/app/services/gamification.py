@@ -12,6 +12,8 @@ APP_TZ = timezone(timedelta(hours=8))
 # workout and meal amounts are also hard-coded in the gamification_xp_sources migration's trigger
 XP_REWARDS = {"checkin": 10, "workout": 50, "meal": 10, "challenge": 100}
 XP_HISTORY_LIMIT = 20
+# The mileage leaderboard counts runs from today back this many days, inclusive
+MILEAGE_WINDOW_DAYS = 30
 STREAK_BONUS_PER_DAY = 2
 STREAK_BONUS_CAP_DAYS = 7
 
@@ -226,46 +228,74 @@ def friend_ids(supabase: Client, user_id: str) -> list:
     return [r["recipient_id"] for r in sent] + [r["sender_id"] for r in received]
 
 
+def _running_km(supabase: Client, user_ids: list, today: date) -> dict:
+    """Kilometres run in the last MILEAGE_WINDOW_DAYS days, from runs saved to the training log.
+
+    Only logs saved from Strava carry a distance (training_workout_logs.distance_m); manual logs add nothing.
+    """
+    rows = (
+        supabase.table("training_workout_logs").select("user_id,distance_m").in_("user_id", user_ids)
+        .eq("activity_type", "run")
+        .gte("date", (today - timedelta(days=MILEAGE_WINDOW_DAYS - 1)).isoformat())
+        .lte("date", today.isoformat()).execute().data or []
+    )
+    metres = defaultdict(float)
+    for row in rows:
+        if row.get("distance_m") is not None:
+            metres[row["user_id"]] += float(row["distance_m"])
+    return {uid: round(m / 1000, 1) for uid, m in metres.items()}
+
+
 def get_leaderboard(
     supabase: Client, user_id: str, metric: LeaderboardMetric, limit: int, today: date
 ) -> dict:
-    """The user and their friends. On the XP board, anyone who hasn't earned XP yet shows with 0."""
+    """The user and their friends, best first.
+
+    XP and mileage list everyone, with 0 for anyone who has none yet. Streak lists only streaks still
+    alive (checked in today or yesterday).
+    """
     friends = friend_ids(supabase, user_id)
     members = list(dict.fromkeys([user_id, *friends]))
-    query = supabase.table("gamification_user_stats").select(
-        "user_id,total_xp,current_streak,last_check_in_date"
-    ).in_("user_id", members)
+    stats = {
+        row["user_id"]: row
+        for row in supabase.table("gamification_user_stats")
+        .select("user_id,total_xp,current_streak,last_check_in_date")
+        .in_("user_id", members).execute().data or []
+    }
+    totals = {
+        uid: {
+            "xp": stats.get(uid, {}).get("total_xp", 0),
+            "streak": effective_streak(
+                _parse_date(stats.get(uid, {}).get("last_check_in_date")),
+                stats.get(uid, {}).get("current_streak", 0),
+                today,
+            ),
+        }
+        for uid in members
+    }
+    km = _running_km(supabase, members, today) if metric == LeaderboardMetric.MILEAGE else {}
+
     if metric == LeaderboardMetric.STREAK:
-        # Only streaks still alive (checked in today or yesterday) can be ranked by stored value
-        query = query.gte("last_check_in_date", (today - timedelta(days=1)).isoformat()).order(
-            "current_streak", desc=True
-        )
+        ranked = sorted((uid for uid in members if totals[uid]["streak"] > 0), key=lambda uid: -totals[uid]["streak"])
+    elif metric == LeaderboardMetric.MILEAGE:
+        ranked = sorted(members, key=lambda uid: -km.get(uid, 0.0))
     else:
-        query = query.order("total_xp", desc=True)
-    rows = query.execute().data or []
-    if metric == LeaderboardMetric.XP:
-        ranked = {row["user_id"] for row in rows}
-        rows += [
-            {"user_id": uid, "total_xp": 0, "current_streak": 0, "last_check_in_date": None}
-            for uid in members
-            if uid not in ranked
-        ]
-    rows = rows[:limit]
-    names = _display_names(supabase, [row["user_id"] for row in rows])
+        ranked = sorted(members, key=lambda uid: -totals[uid]["xp"])
+    ranked = ranked[:limit]
+    names = _display_names(supabase, ranked)
 
     entries = [
         {
             "position": position,
-            "userId": row["user_id"],
-            "displayName": names.get(row["user_id"]),
-            "totalXp": row["total_xp"],
-            "currentStreak": effective_streak(
-                _parse_date(row.get("last_check_in_date")), row["current_streak"], today
-            ),
-            "rank": rank_for_xp(row["total_xp"])[0],
-            "isCurrentUser": row["user_id"] == user_id,
+            "userId": uid,
+            "displayName": names.get(uid),
+            "totalXp": totals[uid]["xp"],
+            "currentStreak": totals[uid]["streak"],
+            "mileageKm": km.get(uid, 0.0),
+            "rank": rank_for_xp(totals[uid]["xp"])[0],
+            "isCurrentUser": uid == user_id,
         }
-        for position, row in enumerate(rows, start=1)
+        for position, uid in enumerate(ranked, start=1)
     ]
     return {"friendCount": len(set(friends)), "entries": entries}
 

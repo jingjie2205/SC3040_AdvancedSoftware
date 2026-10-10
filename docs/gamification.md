@@ -7,7 +7,7 @@ Daily check-ins, XP and ranks, a friends leaderboard and shared challenges. Ever
 |---|---|
 | G-1 Interactive daily check-in | Three questions (muscle soreness, mood, diet adherence, each 1 to 5). One per day. Builds a streak and gives bonus XP |
 | G-2 Earn and view XP | XP from check-ins, workouts, meals and completed challenges. Rank with progress bar, plus a Recent XP list showing where it came from |
-| G-3 Friends leaderboard | You and your accepted friends, ranked by XP or by current streak. **Mileage is not built** (see the end) |
+| G-3 Friends leaderboard | You and your accepted friends, ranked by XP, current streak, or running mileage over the last 30 days |
 | G-4 Shared challenges | Create with a goal and dates, invite friends, accept or decline, live progress bars, +100 XP for reaching the target |
 
 ## Rules
@@ -49,7 +49,13 @@ drops the ones whose workout or meal was deleted. While an item is held, nothing
 - The streak leaderboard only lists streaks that are still alive (checked in today or yesterday).
 
 **Leaderboard.** Friends are users with an accepted request either way in `friend_requests` (the
-Friends page). On the XP board, friends with no XP yet are listed with 0.
+Friends page). On the XP and mileage boards, friends with nothing yet are listed with 0.
+
+**Mileage** is the distance of runs saved from Strava in the last 30 days, today included. On the Training
+page's Strava tab the user presses Upload Strava data, checks the activity cards, and saves the ones they
+want ("Save to schedule" or "Save all to schedule"); saving keeps the distance in
+`training_workout_logs.distance_m`. Only runs count (Run, TrailRun, VirtualRun), not rides, and manual logs
+have no distance. Saved Strava logs earn no XP, so mileage can't be farmed for XP.
 
 **Challenges**
 
@@ -79,7 +85,7 @@ Errors are `{"detail": "<message>"}` (validation errors from FastAPI use its usu
 | GET | `/gamification/xp-events` | The 20 most recent XP awards, newest first |
 | GET | `/gamification/pending-xp` | XP on hold, with the reason for each item and the total |
 | POST | `/gamification/pending-xp/resync` | Check held XP again. Returns what was paid (`awardedXp`, `released`), cleared (`removed`) and still held (`stillPending`, `items`) |
-| GET | `/gamification/leaderboard?metric=xp\|streak&limit=1..50` | You and your friends (default 10), plus `friendCount` so the page can show the no-friends screen |
+| GET | `/gamification/leaderboard?metric=xp\|streak\|mileage&limit=1..50` | You and your friends (default 10), plus `friendCount` so the page can show the no-friends screen. Entries carry `mileageKm` on the mileage board |
 | GET | `/gamification/challenges` | Challenges you created, joined or are invited to, with everyone's progress. Pays any rewards you've earned |
 | POST | `/gamification/challenges` | Create `{title, metric, targetValue, startDate, endDate, inviteeIds}`. 201, or 422 with a message |
 | POST | `/gamification/challenges/{id}/respond` | `{accept: true\|false}`. 404 if you weren't invited, 409 if already answered or the challenge ended |
@@ -119,7 +125,10 @@ Things to know:
 
 - **Training (Zheng Wee):** workouts get XP from the trigger, and the training code also calls
   `award_xp`; the second award is ignored, so each workout counts once. Readiness reads the soreness
-  answer from `daily_checkins.muscle_fatigue`.
+  answer from `daily_checkins.muscle_fatigue`. Activities saved from Strava earn no XP
+  (`20261011100000_gamification_skip_strava_xp.sql`) but keep their distance
+  (`20261011200000_training_strava_distance.sql`), which the mileage board sums. Hard Rule 1 still holds:
+  the leaderboard isn't an AI feature, and no training calculation reads the distance.
 - **Nutrition (Matt):** meals get XP from the trigger. No code change needed.
 - **Home page calendar (Gary):** reads dates from `GET /checkin/me/dates`. Its Check in button opens the
   questionnaire on the Leaderboard page, so there is one way to check in and one streak.
@@ -183,9 +192,8 @@ in-memory stand-in mirrors the database's unique constraints and the `award_gami
 
 ## Not built yet, and who it depends on
 
-- **Mileage leaderboard (G-3).** Nothing records distance: training volume is load points, not
-  kilometres, and Strava runs aren't saved. Needs a distance field from Training (Zheng Wee) or saved
-  Strava activities (Jing Jie).
+- **Mileage only counts runs saved from Strava.** A run logged by hand on the Training page has no
+  distance field, so it adds nothing.
 - **Challenge rewards are paid when the user next opens their challenges**, not the moment the target is
   reached. The stats panel catches up on the next refresh.
 - **No frontend tests** for this page yet.
