@@ -42,7 +42,7 @@ NOW = datetime(2026, 10, 10, 9, 0, tzinfo=timezone.utc)
 
 # the columns training_workout_logs has: nothing else may be written to it
 COLUMNS = {"id", "user_id", "planned_session_id", "date", "activity_type", "actual_volume", "actual_duration_min",
-           "rpe", "avg_hr", "source", "external_id", "created_at"}
+           "rpe", "avg_hr", "source", "external_id", "distance_m", "created_at"}
 
 
 def activity(**over):
@@ -250,6 +250,7 @@ def test_a_saved_log_is_exactly_what_the_card_said_it_would_be():
     assert (row["user_id"], row["source"], row["external_id"]) == (USER_A, "strava", "1001")
     assert (row["activity_type"], row["actual_duration_min"], row["actual_volume"]) == (card.activity_type, card.duration_min, card.volume)
     assert (row["date"], row["avg_hr"], row["rpe"]) == ("2026-08-14", 151, None)
+    assert row["distance_m"] == card.distance_m == 8123.4  # kept for the leaderboard's mileage view
     assert row["created_at"] == NOW.isoformat() and row["id"] == "log-1"
 
 

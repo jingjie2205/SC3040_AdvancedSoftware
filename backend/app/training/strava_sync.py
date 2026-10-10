@@ -204,6 +204,7 @@ def _row(user_id: str, log: WorkoutSession) -> Dict[str, Any]:
         "avg_hr": log.avg_hr,
         "source": SOURCE,
         "external_id": log.external_id,
+        "distance_m": log.distance_m,
         "created_at": log.created_at.isoformat(),
     }
 
@@ -371,6 +372,7 @@ class StravaSyncService:
             avg_hr=heart,
             source="strava",
             external_id=str(int(activity.id)),
+            distance_m=round(max(float(activity.distance or 0), 0.0), 1),
             created_at=self.clock(),
         )
 

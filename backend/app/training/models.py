@@ -124,6 +124,8 @@ class WorkoutSession(ApiModel):
     source: WorkoutSource = "manual"
     # For a log saved from Strava, the id of the Strava activity it came from; None for everything else.
     external_id: Optional[str] = None
+    # Metres, for a log saved from Strava; None for manual logs. Only the leaderboard's mileage view reads it.
+    distance_m: Optional[float] = None
     created_at: datetime
 
 
