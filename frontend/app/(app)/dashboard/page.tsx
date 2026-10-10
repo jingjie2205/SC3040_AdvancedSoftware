@@ -46,42 +46,8 @@ import { useRouter } from "next/navigation";
 import { fetchBatchCalories, BatchCalories } from "@/lib/nutrition";
 import { getActivityIcon } from "./components/icons";
 
-/* ------------------------------------------------------------------ */
-/* Mock data                                                          */
-/* ------------------------------------------------------------------ */
-
-type TrainingView = "weekly" | "latest";
-type FoodView = "weekly";
-
-const DAILY_TRAINING = [
-  { label: "Mon", mileage: 4.2, avgHr: 138 },
-  { label: "Tue", mileage: 0, avgHr: 0 },
-  { label: "Wed", mileage: 6.8, avgHr: 151 },
-  { label: "Thu", mileage: 3.1, avgHr: 129 },
-  { label: "Fri", mileage: 0, avgHr: 0 },
-  { label: "Sat", mileage: 9.5, avgHr: 146 },
-  { label: "Sun", mileage: 5.4, avgHr: 133 },
-];
-
-const WEEKLY_TRAINING = [
-  { label: "Wk 1", mileage: 22.4, avgHr: 136 },
-  { label: "Wk 2", mileage: 27.1, avgHr: 141 },
-  { label: "Wk 3", mileage: 18.6, avgHr: 132 },
-  { label: "Wk 4", mileage: 31.8, avgHr: 144 },
-  { label: "Wk 5", mileage: 29.0, avgHr: 139 },
-  { label: "Wk 6", mileage: 33.5, avgHr: 147 },
-];
-
-const LATEST_ACTIVITY = {
-  type: "Morning Threshold Run",
-  date: "Today, 6:42 AM",
-  distanceKm: 9.5,
-  durationMin: 52,
-  avgHr: 146,
-  maxHr: 168,
-  pace: "5:28 /km",
-  calories: 612,
-};
+type TrainingView = "daily" | "latest";
+type FoodView = "daily" | "weekly";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -148,12 +114,13 @@ export default function HomePage() {
 
   // Training / food view toggles
   const [trainingView, setTrainingView] = useState<TrainingView>("latest");
-  const [foodView, setFoodView] = useState<FoodView>("weekly");
+  const [foodView, setFoodView] = useState<FoodView>("daily");
   const [dailyFoodData, setDailyFoodData] = useState<any[]>([]);
   const [weeklyFoodData, setWeeklyFoodData] = useState<any[]>([]);
   const [latestWorkout, setLatestWorkout] = useState<WorkoutSession | null>(
     null,
   );
+  const [weeklyWorkouts, setWeeklyWorkouts] = useState<WorkoutSession[]>([]);
 
   useEffect(() => {
     async function fetchFoodData() {
@@ -226,13 +193,14 @@ export default function HomePage() {
 
       try {
         const schedule = await httpTrainingApi.getSchedule(fromDate, to);
-        if (schedule.workouts.length > 0) {
-          const sortedWorkouts = [...schedule.workouts].sort(
-            (a, b) =>
-              new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-          );
+        const sortedWorkouts = [...schedule.workouts].sort(
+          (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        );
+        if (sortedWorkouts.length > 0) {
           setLatestWorkout(sortedWorkouts[0]);
         }
+        setWeeklyWorkouts(schedule.workouts);
       } catch (error) {
         console.error("Failed to fetch latest workout:", error);
       }
@@ -246,8 +214,61 @@ export default function HomePage() {
   }, [height, weight]);
   const bmiInfo = bmi ? bmiCategory(bmi) : null;
 
-  const trainingData = WEEKLY_TRAINING;
-  const foodData = weeklyFoodData;
+  const dailyTrainingData = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const dailyData: Record<
+      string,
+      { volume: number; duration: number; calories: number }
+    > = {};
+    let totalVolume = 0;
+    let totalDuration = 0;
+    let totalCalories = 0;
+
+    // Initialize the last 7 days
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      const dateString = date.toLocaleDateString("en-US", { weekday: "short" });
+      dailyData[dateString] = { volume: 0, duration: 0, calories: 0 };
+    }
+
+    weeklyWorkouts.forEach((workout) => {
+      const workoutDate = new Date(workout.createdAt);
+      workoutDate.setHours(0, 0, 0, 0);
+      const diffDays = Math.floor(
+        (today.getTime() - workoutDate.getTime()) / (1000 * 60 * 60 * 24),
+      );
+
+      if (diffDays >= 0 && diffDays <= 6) {
+        const dateString = workoutDate.toLocaleDateString("en-US", {
+          weekday: "short",
+        });
+        dailyData[dateString].volume += workout.actualVolume || 0;
+        dailyData[dateString].duration += workout.actualDurationMin || 0;
+        dailyData[dateString].calories += workout.calories || 0;
+
+        totalVolume += workout.actualVolume || 0;
+        totalDuration += workout.actualDurationMin || 0;
+        totalCalories += workout.calories || 0;
+      }
+    });
+
+    const chartData = Object.keys(dailyData).map((label) => ({
+      label,
+      ...dailyData[label],
+    }));
+
+    return {
+      chartData,
+      totalVolume,
+      totalDuration,
+      totalCalories,
+    };
+  }, [weeklyWorkouts]);
+
+  const foodData = foodView === "daily" ? dailyFoodData : weeklyFoodData;
 
   useEffect(() => {
     async function fetchUserData() {
@@ -464,7 +485,6 @@ export default function HomePage() {
           </div>
 
           {/* Daily check-in */}
-
           <Calendar />
         </div>
 
@@ -480,7 +500,7 @@ export default function HomePage() {
               </p>
             </div>
             <div className="flex gap-1 rounded-lg border border-slate-800 bg-slate-950/60 p-1 w-fit">
-              {(["weekly", "latest"] as TrainingView[]).map((view) => (
+              {(["daily", "latest"] as TrainingView[]).map((view) => (
                 <button
                   key={view}
                   onClick={() => setTrainingView(view)}
@@ -556,45 +576,94 @@ export default function HomePage() {
               )}
             </div>
           ) : (
-            <div className="h-[260px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={trainingData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="label" stroke="#64748b" fontSize={11} />
-                  <YAxis yAxisId="left" stroke="#64748b" fontSize={11} />
-                  <YAxis
-                    yAxisId="right"
-                    orientation="right"
-                    stroke="#64748b"
-                    fontSize={11}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "#0f172a",
-                      borderColor: "#334155",
-                      borderRadius: "8px",
-                      fontSize: "12px",
-                    }}
-                  />
-                  <Bar
-                    yAxisId="left"
-                    dataKey="mileage"
-                    fill="#10b981"
-                    opacity={0.6}
-                    radius={[4, 4, 0, 0]}
-                    name="Mileage (km)"
-                  />
-                  <Line
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="avgHr"
-                    stroke="#38bdf8"
-                    strokeWidth={2.5}
-                    dot={false}
-                    name="Avg HR"
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-1 flex flex-col gap-4 justify-center">
+                <StatBlock
+                  label="Total Volume"
+                  value={`${dailyTrainingData.totalVolume} pts`}
+                />
+                <StatBlock
+                  label="Total Duration"
+                  value={`${dailyTrainingData.totalDuration} min`}
+                />
+                <StatBlock
+                  label="Total Calories"
+                  value={`${dailyTrainingData.totalCalories} kcal`}
+                  icon={<Flame className="h-3.5 w-3.5 text-amber-400" />}
+                />
+              </div>
+              <div className="lg:col-span-2 h-[260px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={dailyTrainingData.chartData}>
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#1e293b"
+                      vertical={false}
+                    />
+                    <XAxis
+                      dataKey="label"
+                      stroke="#64748b"
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      stroke="#64748b"
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip
+                      cursor={{ fill: "#1e293b" }}
+                      content={({ active, payload, label }) => {
+                        if (active && payload && payload.length) {
+                          const data = payload[0].payload;
+                          return (
+                            <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl">
+                              <p className="mb-2 text-sm font-bold text-white">
+                                {label}
+                              </p>
+                              <div className="space-y-1">
+                                <p className="text-xs text-slate-300">
+                                  <span className="inline-block w-16 text-slate-400">
+                                    Volume:
+                                  </span>
+                                  <span className="font-semibold">
+                                    {data.volume} pts
+                                  </span>
+                                </p>
+                                <p className="text-xs text-slate-300">
+                                  <span className="inline-block w-16 text-slate-400">
+                                    Duration:
+                                  </span>
+                                  <span className="font-semibold">
+                                    {data.duration} min
+                                  </span>
+                                </p>
+                                <p className="text-xs text-slate-300">
+                                  <span className="inline-block w-16 text-slate-400">
+                                    Calories:
+                                  </span>
+                                  <span className="font-semibold text-amber-400">
+                                    {data.calories} kcal
+                                  </span>
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      }}
+                    />
+                    <Bar
+                      dataKey="volume"
+                      fill="#10b981"
+                      radius={[4, 4, 0, 0]}
+                      maxBarSize={40}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           )}
         </div>
