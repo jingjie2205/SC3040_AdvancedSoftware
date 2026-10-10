@@ -4,6 +4,8 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Callable, Dict, List, Optional, Tuple
 
+from postgrest.exceptions import APIError
+
 from app.training.models import (
     PlannedSession,
     ReadinessScore,
@@ -50,6 +52,9 @@ class FakeTrainingRepository:
         self.checkins: Dict[str, Checkin] = {}
         self.profiles: Dict[str, AthleteProfile] = {}
         self.sleep: Dict[Tuple[str, date], float] = {}
+        self.xp_awards: List[Tuple[str, str]] = []  # what the leaderboard ends up with: a repeat counts once
+        self.xp_calls: List[Tuple[str, str]] = []  # every call made, so a double call can't hide behind that
+        self.xp_error: Optional[Exception] = None
         self.apply_calls = 0
 
     # ---------------------------------------------------------------- reads
@@ -98,6 +103,13 @@ class FakeTrainingRepository:
 
     def delete_sleep(self, user_id: str, day: date) -> None:
         self.sleep.pop((user_id, day), None)
+
+    def award_workout_xp(self, user_id: str, workout_id: str) -> None:
+        self.xp_calls.append((user_id, workout_id))
+        if self.xp_error:
+            raise self.xp_error
+        if (user_id, workout_id) not in self.xp_awards:  # the real helper ignores a repeat
+            self.xp_awards.append((user_id, workout_id))
 
     def get_cached_readiness(
         self, user_id: str, day: date
@@ -223,6 +235,10 @@ class FilteringQuery:
         self.operation, self.payload, self.on_conflict = "upsert", dict(row), on_conflict
         return self
 
+    def insert(self, row):
+        self.operation, self.payload = "insert", dict(row)
+        return self
+
     def delete(self):
         self.operation = "delete"
         return self
@@ -243,6 +259,13 @@ class FilteringQuery:
         if failure:
             raise failure
         stored = self.client.tables.setdefault(self.table, [])
+        if self.operation == "insert":
+            keys = self.client.unique.get(self.table, ())
+            if keys and any(all(row.get(k) == self.payload.get(k) for k in keys) for row in stored):
+                raise APIError({"message": "duplicate key value violates unique constraint", "code": "23505",
+                                "hint": None, "details": None})
+            stored.append(dict(self.payload))
+            return SimpleNamespace(data=[dict(self.payload)])
         if self.operation == "upsert":
             keys = [c.strip() for c in (self.on_conflict or "").split(",") if c.strip()]
             for existing in stored:
@@ -275,8 +298,9 @@ class TableClient:
     with each request and may return an error to raise for just that one.
     """
 
-    def __init__(self, tables=None, error=None, error_when: Optional[Callable] = None):
+    def __init__(self, tables=None, error=None, error_when: Optional[Callable] = None, unique=None):
         self.tables, self.error, self.error_when, self.requests = tables or {}, error, error_when, []
+        self.unique = unique or {}  # table -> the columns that must be unique, like the real schema
 
     def table(self, name):
         return FilteringQuery(self, name)

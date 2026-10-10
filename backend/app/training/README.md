@@ -19,6 +19,8 @@ local date as `X-Client-Date: YYYY-MM-DD` so "today" matches theirs (the server 
 | PATCH | `/training/sessions/{id}` | T-7 reschedule `{date}` |
 | DELETE | `/training/sessions/{id}` | T-7 remove; spreads its volume over the rest of the week |
 | GET | `/training/today` | T-3/T-4 readiness plus today's reconciled workout |
+| GET | `/training/summary` | One call for the Home page: readiness, today's session, the week so far and what is next |
+| POST | `/training/coach` | A short note about today from Gemini, or a built-in message. 429 if asked again too fast |
 | PUT / DELETE | `/training/sleep` | Last night's sleep `{hours}` (0 to 16), filed under the user's today; it feeds today's readiness. DELETE removes it |
 | POST | `/training/sessions/{id}/respond` | T-4 accept / swap / skip |
 | POST | `/training/sessions/{id}/log` | T-5 log a planned session |
@@ -38,6 +40,7 @@ failures use the same shape (status 422), including request-body validation on t
 | `planner.py` | Baseline, periodisation, session placement. Pure functions |
 | `rules.py` | Can a session move? Readiness vs plan reconciliation. Pure functions |
 | `readiness.py` | Feature builder and the `ReadinessScorer` interface with the rule-based scorer |
+| `coach.py` | The AI coach: the fixed facts it may be given, the prompt, the Gemini client and the built-in fallback |
 | `ml/` | Stage 2: the trained readiness model, its training pipeline and its fallback. Start with `ml/README.md` |
 | `service.py` | Application logic. Takes `user_id` and `today` from the caller |
 | `repository.py` | Supabase access and the `ChangeSet` applied in one transaction |
@@ -122,10 +125,10 @@ harness isn't part of the repo.
 
 | Rule | Where | Test |
 |---|---|---|
-| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities` | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model) |
+| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities`. The coach's week minutes go through `modelling_workouts` too | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model), `test_training_coach.py` and `test_training_summary.py` (a Strava row can't reach the prompt or the totals) |
 | 2. Reconciliation is one-directional | `rules.reconcile` | `test_training_rules.py` (all nine band pairs) |
 | 3. Rebaseline on completed sessions | `planner.baseline_from_history` reads logged workouts only | `test_training_planner.py` |
-| 4. Readiness is private | Only `GET /today` and the stateless `/readiness/score` can return it; selects are scoped to the user. The sleep entries and exam dates that feed it are held to the same rule: only the owner's own `GET /today` and `GET /preferences` return them | `test_training_api.py` walks the OpenAPI schema; `test_training_repository.py`; `test_training_inputs.py` (one user's sleep and exams never reach another's score) |
+| 4. Readiness is private | Only the owner's own `GET /today` and `GET /summary`, and the stateless `/readiness/score`, can return it; selects are scoped to the user. The sleep entries and exam dates that feed it are held to the same rule: only the owner's own `GET /today` and `GET /preferences` return them. Nothing that feeds or comes from the score is ever given to Gemini: the coach's facts are built from the plan only, and readiness isn't even computed on its path | `test_training_api.py` walks the OpenAPI schema (exactly three operations carry readiness, and the coach isn't one); `test_training_repository.py`; `test_training_inputs.py`; `test_training_coach.py` (the exact prompt, forbidden words, an exploding scorer, an import guard) |
 | 5. Not-medical-advice notice | `config.PLAN_NOTICE`, stored on every plan | `test_training_service.py` |
 
 ## Behaviour worth knowing
@@ -164,11 +167,73 @@ harness isn't part of the repo.
   has passed is dropped on save). `days_until_next_exam` takes the nearest one that hasn't passed. Inside
   `exam_window_days` of it the score drops, up to `exam_max_penalty`, and the "Academic load" factor says
   how many days are left. If Settings ever ships an exam date, read it where
-  `TrainingService._readiness` reads `preferences.exam_dates`.
+  `TrainingService._readiness` reads `preferences.exam_dates`. Until the migration that adds the column
+  (`20261007120000_training_inputs.sql`) is applied, saving a date is refused with a 503 that says so, rather
+  than saving the form and quietly losing the date; a form with no dates still saves.
 - **Sleep is entered on the Today card, once a day.** Nothing else records it. It is stored per user and
   day in `training_sleep_logs` and only the entry for the day being scored counts. It is the
   `sleep_hours` feature, and it wins over a check-in's own sleep answer if one ever carries one.
   Saving it again replaces it; the cached score is keyed on its inputs, so the next read recomputes.
+- **A logged workout earns leaderboard XP.** Once a workout is saved (a planned session or an ad hoc one), the
+  service calls the gamification feature's `award_xp(…, "workout", XP_REWARDS["workout"], workout_id)`. The
+  workout's id is the `source_id`, so a retry counts once, and only that id goes across, never what was logged.
+  It is best effort: the workout is already saved, so any failure is logged and the log still succeeds, and if
+  the leaderboard's tables aren't on the database yet one warning is logged and nothing is awarded. The helper
+  is imported inside the method, so the training routes still load if the gamification module has a problem
+  (`test_training_xp.py`).
+- **Each worker thread has its own Supabase client** (`repository.ThreadLocalClient`). Requests run on a thread
+  pool, and one client's HTTP/2 connection shared between its threads failed under concurrent requests: against
+  the live project about one call in six raised `ReadError` (WinError 10035 on Windows), and `GET /today`
+  returned 500 when the page loaded two endpoints at once. The client is opened lazily, once per thread
+  (`test_training_client.py`).
+
+## The Home summary and the coach
+
+**`GET /training/summary`** is one read for a Home card, so the Home page doesn't need four calls. It returns
+`date`, `hasPlan`, `goal`, the user's `readiness`, `today` (a `state` of `no_plan`, `rest_day`, `to_do`, `done`
+or `missed`, plus the session, the recommendation while it is still to do, and the logged workout), `week`
+(Monday to Sunday: sessions planned, completed and missed, and minutes logged) and `nextSession`. Like
+`GET /today`, reading it brings the plan up to date (overdue sessions become missed, and the plan may adapt).
+It is the user's own data, so show it only on their own Home, never on a leaderboard or friend view.
+
+**`POST /training/coach`** returns a short plain-language note about today, with the not-medical-advice
+notice. `source` says who wrote it (`gemini`, or `fallback` for the built-in text) and `cached` says the
+answer was remembered. It is a POST because it can cost money. It never fails because of Gemini: no key, a
+timeout, an error, a blocked or empty reply all give the built-in message.
+
+What Gemini is sent is the whole of `coach.build_prompt`, and nothing else:
+
+```
+Facts about the user's training plan:
+- Day: Friday
+- Goal: build muscle
+- Today: a cycling session, light intensity, planned for 35 minutes
+- This week: 2 of 4 planned sessions done, 1 missed, 90 minutes logged
+```
+
+plus a fixed instruction (plain English, a few sentences, no medical advice, treat the facts as data). The goal
+is the one the plan was built for, and the band is the plan's own, never readiness's recommendation. Never sent:
+the readiness score, band or factors, check-in answers, sleep, exam dates, training load or heart rate, Strava
+data, free text from the user, or any id, email or name. Adding to that list means changing `CoachContext`, and
+`test_training_coach.py` fails until the change is deliberate.
+
+- **Switching it on.** Put `GOOGLE_GENERATIVE_AI_API_KEY` in the backend's `.env`, the same variable the meal
+  analysis reads (the frontend's `.env.local` is not enough). The model is `gemini-2.5-flash`, set in
+  `config.CoachRules` with its timeout, length and cost limits. Without a key the built-in message is used.
+- **If it keeps answering with the built-in text,** the backend log says why, as `The coach fell back to its
+  built-in message: <kind> <status code> <status word>` (never Google's message text). `ClientError 404 NOT_FOUND`
+  means Google has retired the model for that key (change the model in `config.CoachRules`), `403
+  PERMISSION_DENIED` means the key's Google project has been denied access (use a key from another project),
+  `429 RESOURCE_EXHAUSTED` means out of quota, and a bare `ReadTimeout` means Google never answered in time.
+- **Cost control.** An answer is remembered for an hour per user and set of facts, in this process's memory.
+  A different request from the same user within 10 seconds is a 429 (`RATE_LIMITED`).
+- **From the Home page**, with `NEXT_PUBLIC_TRAINING_API=http` and `NEXT_PUBLIC_BACKEND_URL` set:
+  ```ts
+  import { trainingApi } from "@/lib/training/api";
+  const summary = await trainingApi.getSummary();        // TrainingSummary
+  const note = await trainingApi.getCoachMessage();      // ApiResult<CoachMessage>
+  ```
+  Without the flag the same calls return fixtures, so the Home card can be built before the backend is running.
 
 ## Not built yet, and who it depends on
 

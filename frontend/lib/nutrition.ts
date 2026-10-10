@@ -50,6 +50,11 @@ export interface DailyLog {
   active_calories: number | null;
   net_energy: number | null;
 }
+export interface BatchCalories {
+  date: string;
+  total_calories: number | null;
+  active_calories: number | null;
+}
 
 export function mealTotals(items: FoodItem[]) {
   const sum = (key: keyof Omit<FoodItem, "name">) =>
@@ -94,6 +99,20 @@ export async function analyzeMeal(file: File, notes: string): Promise<MealEstima
 export async function fetchDailyLog(day: string, signal?: AbortSignal): Promise<DailyLog> {
   const offset = -new Date(`${day}T12:00:00`).getTimezoneOffset();
   return (await request(`/daily?day=${day}&offset_minutes=${offset}`, { signal })).json();
+}
+
+export async function fetchBatchCalories(
+  startDate: string,
+  endDate: string,
+  signal?: AbortSignal
+): Promise<BatchCalories[]> {
+  const offset = -new Date(`${endDate}T12:00:00`).getTimezoneOffset();
+  return (
+    await request(
+      `/batch_calories?start_date=${startDate}&end_date=${endDate}&offset_minutes=${offset}`,
+      { signal }
+    )
+  ).json();
 }
 
 export async function saveMeal(meal: MealEstimate & { id: string; meal_type: MealType; logged_at: string }): Promise<MealRecord> {

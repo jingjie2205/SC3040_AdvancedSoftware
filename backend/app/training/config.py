@@ -137,5 +137,22 @@ class ReadinessRules:
     use_trained_model: bool = True
 
 
+@dataclass(frozen=True)
+class CoachRules:
+    """The AI coach (Gemini). See coach.py for what it may and may not be given."""
+
+    model: str = "gemini-2.5-flash"
+    timeout_s: float = 15.0
+    max_output_tokens: int = 220
+    temperature: float = 0.5
+    max_message_chars: int = 600
+    # A second, different request from the same user inside this many seconds is refused, so one
+    # signed-in user can't run up the bill. The same request is answered from memory instead.
+    cooldown_s: float = 10.0
+    cache_ttl_s: float = 3600.0
+    cache_max_entries: int = 2000
+
+
 RULES = TrainingRules()
 READINESS_RULES = ReadinessRules()
+COACH_RULES = CoachRules()

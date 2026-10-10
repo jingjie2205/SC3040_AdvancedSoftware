@@ -222,7 +222,6 @@ def daily_log(db: Client, user_id: str, day: date, offset_minutes: int) -> dict:
             .data
         )
     except APIError as exc:
-        # The shared team schema does not yet contain imported Strava activities.
         if exc.code not in {"42P01", "PGRST205"}:
             raise
         activities = []
@@ -236,7 +235,6 @@ def daily_log(db: Client, user_id: str, day: date, offset_minutes: int) -> dict:
             .data
         )
     except APIError as exc:
-        # Some branches have only athlete_profiles, which lacks age and height.
         if exc.code not in {"42P01", "PGRST205"}:
             raise
         profiles = []
@@ -273,3 +271,89 @@ def daily_log(db: Client, user_id: str, day: date, offset_minutes: int) -> dict:
         if bmr is not None and burn is not None and total["total_calories"] is not None
         else None,
     }
+
+
+def fetch_batch_calories(
+    db: Client, user_id: str, start_date: date, end_date: date, offset_minutes: int
+) -> list[dict]:
+    start_time = datetime.combine(
+        start_date, time.min, timezone(timedelta(minutes=offset_minutes))
+    )
+    end_time = datetime.combine(
+        end_date, time.max, timezone(timedelta(minutes=offset_minutes))
+    )
+    start_iso = start_time.astimezone(timezone.utc).isoformat()
+    end_iso = end_time.astimezone(timezone.utc).isoformat()
+
+    all_meals = (
+        db.table("meal_plans")
+        .select("timestamp,total_calories")
+        .eq("user_id", user_id)
+        .gte("timestamp", start_iso)
+        .lt("timestamp", end_iso)
+        .execute()
+        .data
+    )
+    try:
+        all_activities = (
+            db.table("activities")
+            .select("calories, start_date")
+            .eq("user_id", user_id)
+            .gte("start_date", start_iso)
+            .lt("start_date", end_iso)
+            .execute()
+            .data
+        )
+    except APIError as exc:
+        if exc.code not in {"42P01", "PGRST205"}:
+            raise
+        all_activities = []
+
+    meals_by_day = {}
+    for meal in all_meals:
+        day = (
+            datetime.fromisoformat(meal["timestamp"])
+            .astimezone(timezone(timedelta(minutes=offset_minutes)))
+            .date()
+        )
+        if day not in meals_by_day:
+            meals_by_day[day] = []
+        meals_by_day[day].append(meal)
+
+    activities_by_day = {}
+    for activity in all_activities:
+        day = (
+            datetime.fromisoformat(activity["start_date"])
+            .astimezone(timezone(timedelta(minutes=offset_minutes)))
+            .date()
+        )
+        if day not in activities_by_day:
+            activities_by_day[day] = []
+        activities_by_day[day].append(activity)
+
+    logs = []
+    current_date = start_date
+    while current_date <= end_date:
+        day_meals = meals_by_day.get(current_date, [])
+        day_activities = activities_by_day.get(current_date, [])
+        total_calories = (
+            round(sum(meal["total_calories"] for meal in day_meals), 1)
+            if day_meals
+            and all(meal.get("total_calories") is not None for meal in day_meals)
+            else None
+        )
+        active_calories = (
+            round(sum(row["calories"] for row in day_activities), 1)
+            if day_activities
+            and all(row.get("calories") is not None for row in day_activities)
+            else None
+        )
+        logs.append(
+            {
+                "date": current_date.isoformat(),
+                "total_calories": total_calories,
+                "active_calories": active_calories,
+            }
+        )
+        current_date += timedelta(days=1)
+    return logs

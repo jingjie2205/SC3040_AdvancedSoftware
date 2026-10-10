@@ -536,15 +536,24 @@ def _missing(column):
     )
 
 
-def test_a_database_without_the_exam_dates_column_still_saves_the_rest_of_the_form(caplog):
+def test_a_database_without_the_exam_dates_column_still_saves_a_form_that_has_no_exam_dates(caplog):
     client = TableClient({"training_preferences": []}, error_when=_missing("exam_dates"))
     repo = SupabaseTrainingRepository(client)
     with caplog.at_level("WARNING"):
-        repo.save_preferences(USER_A, _preferences_with_exam(DAY))
-        repo.save_preferences(USER_A, _preferences_with_exam(DAY))
+        repo.save_preferences(USER_A, _preferences_with_exam())
+        repo.save_preferences(USER_A, _preferences_with_exam())
     saved = client.tables["training_preferences"]
     assert len(saved) == 1 and "exam_dates" not in saved[0] and saved[0]["days_per_week"] == 4
     assert caplog.text.count("exam_dates") == 1, "say it once, not on every save"
+
+
+def test_a_database_without_the_exam_dates_column_refuses_exam_dates_instead_of_dropping_them_quietly():
+    client = TableClient({"training_preferences": []}, error_when=_missing("exam_dates"))
+    with pytest.raises(TrainingError) as refused:
+        SupabaseTrainingRepository(client).save_preferences(USER_A, _preferences_with_exam(DAY))
+    assert refused.value.code == "UNAVAILABLE" and refused.value.status_code == 503
+    assert "migration" in refused.value.message and "exam dates" in refused.value.message.lower()
+    assert client.tables["training_preferences"] == [], "nothing is saved when the form can't be saved as typed"
 
 
 def test_a_missing_column_that_is_not_exam_dates_is_not_papered_over(caplog):

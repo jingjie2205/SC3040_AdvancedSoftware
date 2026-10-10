@@ -7,9 +7,10 @@ request body. All writes that touch more than one row go through one `ChangeSet`
 single Postgres function in one transaction, so a failure never leaves a partial write.
 """
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple
 
 from postgrest.exceptions import APIError
 from supabase import Client
@@ -89,6 +90,8 @@ class TrainingRepository(Protocol):
         self, user_id: str, day: date
     ) -> Optional[Tuple[ReadinessScore, str]]: ...
 
+    def award_workout_xp(self, user_id: str, workout_id: str) -> None: ...
+
     def save_readiness(self, user_id: str, score: ReadinessScore, feature_hash: str) -> None: ...
 
     def list_readiness(self, user_id: str, start: date, end: date) -> List[ReadinessScore]: ...
@@ -137,9 +140,16 @@ class SupabaseTrainingRepository:
             self.db.table("training_preferences").upsert(row, on_conflict="user_id").execute()
         except APIError as error:
             # A database that hasn't had the exam-dates migration yet must still be able to save the
-            # rest of the form, which is the first thing a new user does. Exam dates then stay off.
+            # rest of the form, which is the first thing a new user does. But dates the user typed are
+            # never dropped quietly (the form would say "saved" and they would vanish): those are refused.
             if error.code not in _SCHEMA_NOT_READY or "exam_dates" not in str(error.message):
                 raise
+            if preferences.exam_dates:
+                raise TrainingError(
+                    "UNAVAILABLE",
+                    "Exam dates aren't set up on this database yet. Apply the latest training migration, "
+                    "or save without exam dates.",
+                ) from error
             _warn_once("exam-dates", "training_preferences has no exam_dates column; saving without exam dates")
             row.pop("exam_dates", None)
             self.db.table("training_preferences").upsert(row, on_conflict="user_id").execute()
@@ -265,6 +275,24 @@ class SupabaseTrainingRepository:
                 "Sleep tracking isn't set up on this database yet. Apply the latest training migration first.",
             ) from error
 
+    # ------------------------------------------------------------------ leaderboard XP
+
+    def award_workout_xp(self, user_id: str, workout_id: str) -> None:
+        """
+        A logged workout earns XP on the leaderboard, through the helper the gamification feature
+        provides for other features. It ignores the same workout twice, so a retry is harmless. The
+        leaderboard's tables may not be on the database yet, in which case there is nothing to award
+        and one warning is logged.
+        """
+        from ..services.gamification import XP_REWARDS, award_xp  # not at import time: keeps this package standalone
+
+        try:
+            award_xp(self.db, user_id, "workout", XP_REWARDS["workout"], workout_id)
+        except APIError as error:
+            if error.code not in _SCHEMA_NOT_READY:
+                raise
+            _warn_once(f"xp:{error.code}", "Leaderboard tables not ready (%s); workout XP not awarded", error.code)
+
     def get_cached_readiness(
         self, user_id: str, day: date
     ) -> Optional[Tuple[ReadinessScore, str]]:
@@ -295,5 +323,29 @@ class SupabaseTrainingRepository:
         ).execute()
 
 
+class ThreadLocalClient:
+    """
+    A Supabase client for each worker thread, behind the one name the repository uses.
+
+    Requests run on a thread pool, and the client's HTTP/2 connection can't be shared between threads: each
+    thread's reads and writes change the one socket's timeout under the others. Against the live project about
+    one call in six then failed with `ReadError` (WinError 10035 on Windows), and the training page, which
+    loads two or three endpoints at once, hit it on its first load. A client per thread keeps the connection
+    reuse and removes the sharing.
+    """
+
+    def __init__(self, factory: Callable[[], Client]) -> None:
+        self._factory = factory
+        self._local = threading.local()
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):  # never build a client for a private or special lookup
+            raise AttributeError(name)
+        client = getattr(self._local, "client", None)
+        if client is None:
+            client = self._local.client = self._factory()
+        return getattr(client, name)
+
+
 def create_repository() -> SupabaseTrainingRepository:
-    return SupabaseTrainingRepository(get_supabase_admin())
+    return SupabaseTrainingRepository(ThreadLocalClient(get_supabase_admin))

@@ -58,6 +58,24 @@ def get_daily_log(
         ) from exc
 
 
+@router.get("/batch_calories")
+def get_batch_calories(
+    start_date: date,
+    end_date: date,
+    offset_minutes: int = Query(default=0, ge=-720, le=840),
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        return nutrition.fetch_batch_calories(
+            get_supabase_admin(), user_id, start_date, end_date, offset_minutes
+        )
+    except (APIError, httpx.RequestError) as exc:
+        raise HTTPException(
+            503,
+            "Could not load your nutrition log. Check the database setup and try again.",
+        ) from exc
+
+
 @router.delete("/meals/{meal_id}", status_code=204)
 def delete_meal(meal_id: UUID, user_id: str = Depends(get_current_user_id)):
     try:

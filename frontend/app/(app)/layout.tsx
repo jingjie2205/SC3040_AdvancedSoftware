@@ -1,7 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Activity,
   Home,
@@ -11,14 +12,13 @@ import {
   Trophy,
   User,
   Settings,
+  Users,
 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 
-// Mock data for now
-const mockUser: { name: string; email: string; image: string | null } = {
-  name: "John Doe",
-  email: "john.doe@example.com",
-  image: "https://i.pravatar.cc/200?img=13", // set to null to test the default icon, using pravatar for mock avatars. /200 = resolution?img=number
-  //image: null, // set to null to test the default icon
+type HeaderUser = {
+  name: string;
+  email: string;
 };
 
 export default function DashboardLayout({
@@ -27,7 +27,74 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const user = mockUser;
+  const [user, setUser] = useState<HeaderUser | null>(null);
+  const router = useRouter();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const supabase = createClient();
+
+    // Get the currently logged-in user.
+    const getCurrentUser = async () => {
+      const { data, error } = await supabase.auth.getUser();
+
+      if (error || !data.user) {
+        setUser(null);
+        return;
+      }
+
+      const currentUser = data.user;
+
+      setUser({
+        name:
+          currentUser.user_metadata?.name ||
+          currentUser.email?.split("@")[0] ||
+          "User",
+        email: currentUser.email || "",
+      });
+    };
+
+    getCurrentUser();
+
+    // Keep the header updated when the authentication state changes.
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      const currentUser = session?.user;
+
+      if (!currentUser) {
+        setUser(null);
+        return;
+      }
+
+      setUser({
+        name:
+          currentUser.user_metadata?.name ||
+          currentUser.email?.split("@")[0] ||
+          "User",
+        email: currentUser.email || "",
+      });
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    const supabase = createClient();
+
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      console.error("Logout failed:", error.message);
+      return;
+    }
+
+    setIsMenuOpen(false);
+    router.replace("/login");
+    router.refresh();
+  };
 
   const navItems = [
     { name: "Home", href: "/dashboard", icon: Home },
@@ -36,6 +103,7 @@ export default function DashboardLayout({
     { name: "AI Assistance", href: "/dashboard/ai", icon: Sparkles },
     { name: "Leaderboard", href: "/dashboard/leaderboard", icon: Trophy },
     { name: "Settings", href: "/dashboard/settings", icon: Settings },
+    { name: "Friends", href: "/dashboard/friends", icon: Users },
   ];
 
   return (
@@ -54,10 +122,14 @@ export default function DashboardLayout({
               </span>
             </Link>
 
-            {/* Navigation links container */}
+            {/* Navigation links */}
             <nav className="hidden md:flex items-center gap-1.5 rounded-xl border border-slate-800/80 bg-slate-900/40 p-1.5 text-xs">
               {navItems.map((item) => {
-                const isActive = pathname === item.href;
+                const isActive =
+                  pathname === item.href ||
+                  (item.href !== "/dashboard" &&
+                    pathname.startsWith(`${item.href}/`));
+
                 const Icon = item.icon;
 
                 return (
@@ -78,27 +150,58 @@ export default function DashboardLayout({
             </nav>
           </div>
 
-          {/* Right: welcome message + user icon */}
-          <div className="flex items-center gap-3">
-            <p className="hidden sm:block text-sm text-slate-200">
-              Welcome back,{" "}
-              <span className="font-semibold text-white">{user.name}</span>
-            </p>
-            <div
-              className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-slate-700 bg-slate-800 text-emerald-400"
-              title={user.email}
-            >
-              {user.image ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={user.image}
-                  alt={user.name}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <User className="h-4 w-4" />
-              )}
-            </div>
+          {/* Right: user menu */}
+          <div className="relative flex items-center">
+            {user && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setIsMenuOpen((open) => !open)}
+                  aria-expanded={isMenuOpen}
+                  aria-haspopup="menu"
+                  className="flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-slate-800/60"
+                >
+                  <p className="hidden sm:block text-sm text-slate-200">
+                    Welcome back,{" "}
+                    <span className="font-semibold text-white">
+                      {user.name}
+                    </span>
+                  </p>
+
+                  <div
+                    className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-slate-700 bg-slate-800 text-emerald-400"
+                    title={user.email}
+                  >
+                    <User className="h-4 w-4" />
+                  </div>
+                </button>
+
+                {isMenuOpen && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-full z-50 mt-2 w-52 rounded-xl border border-slate-700 bg-slate-900 p-2 shadow-xl"
+                  >
+                    <div className="border-b border-slate-700 px-3 py-2">
+                      <p className="text-sm font-semibold text-white">
+                        {user.name}
+                      </p>
+                      <p className="truncate text-xs text-slate-400">
+                        {user.email}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={handleLogout}
+                      className="mt-1 flex w-full items-center rounded-lg px-3 py-2 text-sm text-red-400 transition-colors hover:bg-red-500/10"
+                    >
+                      Logout
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       </header>
