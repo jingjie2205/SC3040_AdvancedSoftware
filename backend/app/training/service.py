@@ -559,6 +559,7 @@ class TrainingService:
             actual_duration_min=data.actual_duration_min,
             rpe=data.rpe,
             avg_hr=data.avg_hr,
+            calories=data.calories,
             source="manual",
             created_at=_now(),
         )

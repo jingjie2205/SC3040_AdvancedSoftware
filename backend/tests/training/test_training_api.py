@@ -300,6 +300,23 @@ def test_ad_hoc_logging_and_field_errors(client, repo):
     assert future.json()["detail"]["fieldErrors"]["date"]
 
 
+def test_calories_are_accepted_returned_and_validated_like_the_other_log_fields(client, repo):
+    onboard(client, repo)
+    entry = {"date": TODAY.isoformat(), "activityType": "run", "actualDurationMin": 30, "actualVolume": 25}
+
+    with_calories = client.post("/api/v1/training/sessions", json={**entry, "calories": 310}, headers=headers())
+    assert with_calories.status_code == 200 and with_calories.json()["workout"]["calories"] == 310
+    without = client.post("/api/v1/training/sessions", json=entry, headers=headers())
+    assert without.status_code == 200 and without.json()["workout"]["calories"] is None
+
+    shown = client.get(f"/api/v1/training/schedule?from={TODAY.isoformat()}&to={TODAY.isoformat()}", headers=headers())
+    assert sorted(w["calories"] for w in shown.json()["workouts"] if w["calories"] is not None) == [310]
+
+    for bad in (-5, 20001, "lots", 12.5):
+        refused = client.post("/api/v1/training/sessions", json={**entry, "calories": bad}, headers=headers())
+        assert refused.status_code == 422 and "calories" in refused.json()["detail"]["fieldErrors"], bad
+
+
 def test_a_malformed_session_id_is_a_validation_error_not_a_server_error(client):
     assert client.delete("/api/v1/training/sessions/not-a-uuid", headers=headers()).status_code == 422
 

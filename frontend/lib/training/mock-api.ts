@@ -718,7 +718,7 @@ export const mockTrainingApi: TrainingApi = {
     const valid = validateLog(input);
     if (!valid.ok) return valid;
 
-    const workout = makeWorkout({ plannedSessionId: session.id, ...valid.data, source: "manual", calories: valid.data.actualDurationMin * 8 });
+    const workout = makeWorkout({ plannedSessionId: session.id, ...valid.data, source: "manual" });
     s.workouts.push(workout);
     session.status =
       workout.actualVolume >= R.partialCompletionRatio * session.targetVolume
@@ -759,7 +759,6 @@ export const mockTrainingApi: TrainingApi = {
     const workout = makeWorkout({
       plannedSessionId: null,
       ...valid.data,
-      calories: valid.data.actualDurationMin * 8,
       source: "manual",
     });
     getState().workouts.push(workout);

@@ -24,5 +24,6 @@ export const TRAINING_RULES = {
     volume: { max: 1000 },
     rpe: { min: 1, max: 10 },
     avgHr: { min: 30, max: 230 },
+    calories: { min: 0, max: 20000 },
   },
 } as const;

@@ -23,8 +23,8 @@ local date as `X-Client-Date: YYYY-MM-DD` so "today" matches theirs (the server 
 | POST | `/training/coach` | A short note about today from Gemini, or a built-in message. 429 if asked again too fast |
 | PUT / DELETE | `/training/sleep` | Last night's sleep `{hours}` (0 to 16), filed under the user's today; it feeds today's readiness. DELETE removes it |
 | POST | `/training/sessions/{id}/respond` | T-4 accept / swap / skip |
-| POST | `/training/sessions/{id}/log` | T-5 log a planned session |
-| POST | `/training/sessions` | T-5 log an ad hoc session |
+| POST | `/training/sessions/{id}/log` | T-5 log a planned session `{date, activityType, actualDurationMin, actualVolume, rpe?, avgHr?, calories?}`. `calories` is optional: whole kcal, 0 to 20,000 (`config.workout_calories_max`) |
+| POST | `/training/sessions` | T-5 log an ad hoc session (same body). Calories come back on the workout in `GET /training/schedule`, where the Home page reads them |
 | GET | `/training/strava/status` | The Strava tab: whether Strava is connected, and how many activities from it are on the schedule. No call to Strava |
 | POST | `/training/strava/pull` | "Upload Strava data": the latest 100 Strava activities as cards, newest first, each saying how it would be saved and whether it already is. Saves nothing. 409 `NOT_CONNECTED`, 429, 503 |
 | POST | `/training/strava/save` | "Save to schedule" `{stravaIds}` (1 to 100): saves those activities as training logs (`source = 'strava'`). Asks Strava again, so what is saved is what Strava said. Safe to repeat. Answers `{savedIds, alreadySaved, skipped}` |
@@ -90,12 +90,22 @@ failures use the same shape (status 422), including request-body validation on t
      so each saved Strava activity would earn 50 XP (and "Save all" up to 5,000, again after every removal, and
      challenge progress with it). It **is safe to run again**, and it is the one change here to another
      owner's code, flagged to Yew Yi in the PR that added it. It leaves existing XP alone.
+   - `supabase/migrations/20261011200000_training_logs_calories.sql` lets a logged workout keep the calories the
+     athlete typed. The live project already had a hand-added `calories` column on `training_workout_logs`
+     (bigint, nullable, a few values in it) that nothing in the repo created or wrote, so the column is only
+     added where it is missing and an existing one is left as it is; a range check is added either way, the write
+     function `training_apply_changes` is replaced with the same body plus calories in the workout insert, and
+     `training_schema_features()` is added, which the backend asks before it accepts calories (it answers
+     `{"calories": true}` only once the write function keeps them, which the column alone doesn't prove). It **is safe
+     to run again** and changes no existing row.
 
    The backend copes with a database that hasn't had the second one yet (preferences save without exam
    dates, sleep reads as missing, plans save without a goal), but logging sleep or saving an exam date then
    answers 503 with a message saying to apply it. Saving from the Strava tab answers 503 the same way until the
    third (pulling and showing cards needs no migration; the schedule just can't hold a Strava log before it).
    Apply the fourth before anyone saves Strava activities on a project that has the gamification trigger.
+   Logging a workout **with** calories answers 503 ("Calories aren't set up on this database yet") until the fifth
+   is applied, instead of saving the log and losing the number; a log without calories is never affected.
 3. **Check it landed.** In the SQL editor:
    ```sql
    select tablename, rowsecurity from pg_tables

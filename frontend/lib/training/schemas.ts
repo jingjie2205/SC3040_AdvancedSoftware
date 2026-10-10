@@ -79,6 +79,7 @@ export const logWorkoutSchema = z.object({
     .max(R.workout.volume.max, `Load must be at most ${R.workout.volume.max}`),
   rpe: wholeNumber("RPE", R.workout.rpe.min, R.workout.rpe.max).nullable(),
   avgHr: wholeNumber("Average heart rate", R.workout.avgHr.min, R.workout.avgHr.max).nullable(),
+  calories: wholeNumber("Calories", R.workout.calories.min, R.workout.calories.max).nullable(),
 });
 
 export type LogWorkoutInput = z.infer<typeof logWorkoutSchema>;

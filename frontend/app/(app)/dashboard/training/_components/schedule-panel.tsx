@@ -579,6 +579,7 @@ function WorkoutSummary({ workout }: { workout: WorkoutSession }) {
       Logged: {workout.actualDurationMin} min · {workout.actualVolume} pts
       {workout.rpe !== null && ` · RPE ${workout.rpe}`}
       {workout.avgHr !== null && ` · ${workout.avgHr} bpm avg`}
+      {workout.calories !== null && ` · ${workout.calories} kcal`}
     </p>
   );
 }
