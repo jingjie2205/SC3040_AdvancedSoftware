@@ -96,7 +96,7 @@ export async function buildHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
-async function request<T>(
+export async function request<T>(
   method: string,
   path: string,
   body?: unknown,

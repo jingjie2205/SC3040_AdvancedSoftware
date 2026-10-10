@@ -37,6 +37,7 @@ export type ApiErrorCode =
   | "UNAUTHORIZED"
   | "UNAVAILABLE"
   | "RATE_LIMITED"
+  | "NOT_CONNECTED"
   | "NETWORK"
   | "SERVER_ERROR"
   | MoveRefusalCode;

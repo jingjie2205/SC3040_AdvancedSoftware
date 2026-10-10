@@ -1,55 +1,62 @@
 /**
- * The Strava tab's connection to the backend: the athlete's latest activities, fetched live from Strava
- * through the existing `GET /strava/activities` route, and the link that connects a Strava account.
+ * The Strava tab's connection to the backend: whether Strava is connected, pulling the latest activities as cards,
+ * saving chosen ones to the schedule (the server asks Strava again, so what is saved is what Strava said, never what
+ * the browser sends), taking them off again, and the link that connects a Strava account.
  *
- * Hard Rule 1: Strava data is for display only. This module is deliberately separate from `trainingApi`
- * (which feeds Home, the readiness score, the plan and the coach), and nothing it returns is saved or sent
- * anywhere. `test_training_strava_isolation.py` pins that the two never import each other.
+ * Hard Rule 1: Strava data never reaches an AI feature. This module is deliberately separate from `trainingApi` (which
+ * feeds Home, the readiness score, the plan and the coach); it shares only the request helper.
+ * `test_training_strava_isolation.py` pins that the two never import each other.
  */
-import { buildHeaders } from "./http-api";
-import { parseStravaActivities, type StravaActivity } from "./strava-format";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+import type { ApiResult } from "./api";
+import { request } from "./http-api";
+import {
+  parseDeleted,
+  parsePull,
+  parseSaveResult,
+  parseStatus,
+  type SaveSummary,
+  type StravaCard,
+  type StravaStatus,
+} from "./strava-format";
 
 /** Like the rest of the page's live data, the Strava tab needs the real backend and a signed-in user. */
 export const stravaAvailable = process.env.NEXT_PUBLIC_TRAINING_API === "http";
 
-export type StravaResult =
-  | { status: "ok"; activities: StravaActivity[] }
-  | { status: "not_connected" }
-  | { status: "error"; message: string };
+const unexpected = (): ApiResult<never> => ({
+  ok: false,
+  error: { code: "SERVER_ERROR", message: "The server sent something unexpected. Try again." },
+});
 
-const error = (message: string): StravaResult => ({ status: "error", message });
+async function call<T>(
+  method: string,
+  path: string,
+  parse: (raw: unknown) => T | null,
+  body?: unknown,
+): Promise<ApiResult<T>> {
+  const result = await request<unknown>(method, path, body);
+  if (!result.ok) return result;
+  const parsed = parse(result.data);
+  return parsed === null ? unexpected() : { ok: true, data: parsed };
+}
 
-/** The athlete's latest activities, newest first. Never throws: every failure is a result the tab can show. */
-export async function loadStravaActivities(limit = 10): Promise<StravaResult> {
-  let response: Response;
-  try {
-    response = await fetch(`${BACKEND_URL}/strava/activities?per_page=${limit}`, {
-      headers: await buildHeaders(),
-      cache: "no-store",
-    });
-  } catch {
-    return error("Couldn't reach the server. Check your connection and try again.");
-  }
+/** Whether Strava is connected and how many activities from it are on the schedule. No call to Strava is made. */
+export function loadStatus(): Promise<ApiResult<StravaStatus>> {
+  return call("GET", "/strava/status", parseStatus);
+}
 
-  const body: unknown = await response.json().catch(() => undefined);
+/** Ask Strava for the latest activities, as cards, newest first. Nothing is saved. */
+export function pullActivities(): Promise<ApiResult<StravaCard[]>> {
+  return call("POST", "/strava/pull", parsePull);
+}
 
-  if (response.ok) {
-    return Array.isArray(body)
-      ? { status: "ok", activities: parseStravaActivities(body) }
-      : error("Strava sent something unexpected. Try again in a minute.");
-  }
+/** Save the chosen activities to the schedule. Saving one that is already there does nothing. */
+export function saveToSchedule(stravaIds: number[]): Promise<ApiResult<SaveSummary>> {
+  return call("POST", "/strava/save", parseSaveResult, { stravaIds });
+}
 
-  const detail = typeof body === "object" && body !== null ? (body as { detail?: unknown }).detail : undefined;
-  if (response.status === 400 && typeof detail === "string" && /not connected/i.test(detail)) {
-    return { status: "not_connected" };
-  }
-  if (response.status === 401 || response.status === 403) {
-    return error("Your session has expired. Sign in again.");
-  }
-  // The backend answers 500 when Strava itself refuses (rate limit, revoked access, outage).
-  return error("Strava didn't respond. Try again in a minute, or reconnect Strava in Settings.");
+/** Take every activity that came from Strava off the schedule. The athlete's own logs stay. */
+export function removeFromSchedule(): Promise<ApiResult<number>> {
+  return call("DELETE", "/strava/logs", parseDeleted);
 }
 
 /**

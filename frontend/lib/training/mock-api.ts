@@ -88,8 +88,9 @@ function mockGoal(): Goal | null {
   return asked === "lose_weight" || asked === "build_muscle" || asked === "maintain" ? asked : "maintain";
 }
 
-function makeWorkout(fields: Omit<WorkoutSession, "id" | "createdAt">): WorkoutSession {
-  return { id: nextId("w"), createdAt: new Date().toISOString(), ...fields };
+/** Every workout the fixtures make is the athlete's own: Strava logs only come from the real backend. */
+function makeWorkout(fields: Omit<WorkoutSession, "id" | "createdAt" | "externalId">): WorkoutSession {
+  return { id: nextId("w"), createdAt: new Date().toISOString(), externalId: null, ...fields };
 }
 
 /** Three logged sessions a week for the 4 weeks before `endExclusive` (a Monday). */

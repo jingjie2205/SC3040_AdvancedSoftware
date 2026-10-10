@@ -191,7 +191,7 @@ export default function TrainingPage() {
               }}
             />
           )}
-          {tab === "strava" && <StravaPanel />}
+          {tab === "strava" && <StravaPanel onViewSchedule={() => setTab("schedule")} />}
         </>
       )}
     </div>

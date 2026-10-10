@@ -20,6 +20,7 @@ ErrorCode = Literal[
     "CONSECUTIVE_HIGH_INTENSITY",
     "UNAVAILABLE",
     "RATE_LIMITED",
+    "NOT_CONNECTED",
 ]
 
 _STATUS: Dict[str, int] = {

@@ -82,6 +82,10 @@ class TrainingRules:
     workout_hr_min: int = 30
     workout_hr_max: int = 230
 
+    # A saved Strava activity gets its schedule "pts" from how long it took: this many points a minute, whatever
+    # the activity. A plain, visible rule, and the card shows the result before anything is saved.
+    strava_points_per_minute: float = 1.0
+
     band_weight: Dict[str, float] = field(
         default_factory=lambda: {"push": 1.0, "light": 0.7, "deload": 0.6}
     )
