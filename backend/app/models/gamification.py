@@ -57,6 +57,7 @@ class LeaderboardEntry(BaseModel):
 
 class LeaderboardResponse(BaseModel):
     metric: LeaderboardMetric
+    friendCount: int
     entries: List[LeaderboardEntry]
 
 # --- Challenges ---

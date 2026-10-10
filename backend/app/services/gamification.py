@@ -202,9 +202,10 @@ def friend_ids(supabase: Client, user_id: str) -> list:
 
 def get_leaderboard(
     supabase: Client, user_id: str, metric: LeaderboardMetric, limit: int, today: date
-) -> list:
+) -> dict:
     """The user and their friends. On the XP board, anyone who hasn't earned XP yet shows with 0."""
-    members = list(dict.fromkeys([user_id, *friend_ids(supabase, user_id)]))
+    friends = friend_ids(supabase, user_id)
+    members = list(dict.fromkeys([user_id, *friends]))
     query = supabase.table("gamification_user_stats").select(
         "user_id,total_xp,current_streak,last_check_in_date"
     ).in_("user_id", members)
@@ -226,7 +227,7 @@ def get_leaderboard(
     rows = rows[:limit]
     names = _display_names(supabase, [row["user_id"] for row in rows])
 
-    return [
+    entries = [
         {
             "position": position,
             "userId": row["user_id"],
@@ -240,6 +241,7 @@ def get_leaderboard(
         }
         for position, row in enumerate(rows, start=1)
     ]
+    return {"friendCount": len(set(friends)), "entries": entries}
 
 
 def challenge_status(start: date, end: date, today: date) -> str:
@@ -261,88 +263,121 @@ def longest_run(days: Iterable[date]) -> int:
     return best
 
 
-def _local_day_start_utc(day: date) -> str:
-    return datetime.combine(day, time.min, APP_TZ).astimezone(timezone.utc).isoformat()
+def _local_day_start_utc(day: date) -> datetime:
+    return datetime.combine(day, time.min, APP_TZ).astimezone(timezone.utc)
 
 
-def _progress_by_user(supabase: Client, challenge: dict, user_ids: list) -> dict:
-    progress = {uid: 0 for uid in user_ids}
-    if not user_ids:
-        return progress
-    start, end = _parse_date(challenge["start_date"]), _parse_date(challenge["end_date"])
-    metric = ChallengeMetric(challenge["metric"])
+def _challenge_window(challenge: dict) -> Tuple[date, date]:
+    return _parse_date(challenge["start_date"]), _parse_date(challenge["end_date"])
 
-    if metric == ChallengeMetric.CHECKIN_STREAK:
+
+def _challenge_progress(supabase: Client, challenges: list, accepted: dict) -> dict:
+    """Progress of every accepted participant, keyed by challenge id then user id.
+
+    Reads each source once for all challenges together (check-ins for streak challenges, XP events
+    for the rest), so the number of queries doesn't grow with the number of challenges.
+    """
+    progress = {c["id"]: {uid: 0 for uid in accepted[c["id"]]} for c in challenges}
+    streak = [c for c in challenges if c["metric"] == ChallengeMetric.CHECKIN_STREAK and accepted[c["id"]]]
+    earned = [c for c in challenges if c["metric"] != ChallengeMetric.CHECKIN_STREAK and accepted[c["id"]]]
+
+    if streak:
+        users = sorted({uid for c in streak for uid in accepted[c["id"]]})
+        first = min(_challenge_window(c)[0] for c in streak)
+        last = max(_challenge_window(c)[1] for c in streak)
         rows = (
-            supabase.table("daily_checkins").select("user_id,date").in_("user_id", user_ids)
-            .gte("date", start.isoformat()).lte("date", end.isoformat()).execute().data or []
+            supabase.table("daily_checkins").select("user_id,date").in_("user_id", users)
+            .gte("date", first.isoformat()).lte("date", last.isoformat()).execute().data or []
         )
-        days = defaultdict(list)
+        days_by_user = defaultdict(list)
         for row in rows:
-            days[row["user_id"]].append(_parse_date(row["date"]))
-        for uid, user_days in days.items():
-            progress[uid] = longest_run(user_days)
-        return progress
+            days_by_user[row["user_id"]].append(_parse_date(row["date"]))
+        for c in streak:
+            start, end = _challenge_window(c)
+            for uid in accepted[c["id"]]:
+                progress[c["id"]][uid] = longest_run(d for d in days_by_user[uid] if start <= d <= end)
 
-    query = (
-        supabase.table("xp_events").select("user_id,amount").in_("user_id", user_ids)
-        .gte("created_at", _local_day_start_utc(start))
-        .lt("created_at", _local_day_start_utc(end + timedelta(days=1)))
-    )
-    if metric == ChallengeMetric.SESSIONS:
-        query = query.eq("source", "workout")
-    else:
-        # Challenge rewards don't count towards XP challenges, or finishing one would feed others.
-        query = query.neq("source", "challenge")
-    for row in query.execute().data or []:
-        progress[row["user_id"]] += row["amount"] if metric == ChallengeMetric.XP else 1
+    if earned:
+        users = sorted({uid for c in earned for uid in accepted[c["id"]]})
+        first = _local_day_start_utc(min(_challenge_window(c)[0] for c in earned))
+        last = _local_day_start_utc(max(_challenge_window(c)[1] for c in earned) + timedelta(days=1))
+        # Challenge rewards never count, or finishing one challenge would feed the others.
+        rows = (
+            supabase.table("xp_events").select("user_id,source,amount,created_at").in_("user_id", users)
+            .gte("created_at", first.isoformat()).lt("created_at", last.isoformat())
+            .neq("source", "challenge").execute().data or []
+        )
+        for row in rows:
+            row["at"] = datetime.fromisoformat(row["created_at"])
+        for c in earned:
+            start, end = _challenge_window(c)
+            lo, hi = _local_day_start_utc(start), _local_day_start_utc(end + timedelta(days=1))
+            members = set(accepted[c["id"]])
+            for row in rows:
+                if row["user_id"] not in members or not lo <= row["at"] < hi:
+                    continue
+                if c["metric"] == ChallengeMetric.XP:
+                    progress[c["id"]][row["user_id"]] += row["amount"]
+                elif row["source"] == "workout":
+                    progress[c["id"]][row["user_id"]] += 1
     return progress
 
 
-def _build_challenge(
-    supabase: Client, challenge: dict, participants: list, user_id: str, today: date
-) -> dict:
-    """Declined invitees are hidden; only accepted participants accumulate progress."""
-    visible = [p for p in participants if p["status"] != "declined"]
-    progress = _progress_by_user(
-        supabase, challenge, [p["user_id"] for p in visible if p["status"] == "accepted"]
+def _build_challenges(
+    supabase: Client, challenges: list, participants: dict, user_id: str, today: date
+) -> list:
+    """Response bodies for the given challenges; participants maps challenge id to its rows.
+
+    Declined invitees are hidden; only accepted participants accumulate progress.
+    """
+    visible = {c["id"]: [p for p in participants[c["id"]] if p["status"] != "declined"] for c in challenges}
+    accepted = {cid: [p["user_id"] for p in rows if p["status"] == "accepted"] for cid, rows in visible.items()}
+    progress = _challenge_progress(supabase, challenges, accepted)
+    names = _display_names(
+        supabase,
+        [p["user_id"] for rows in visible.values() for p in rows] + [c["creator_id"] for c in challenges],
     )
-    target = challenge["target_value"]
-    names = _display_names(supabase, [p["user_id"] for p in visible] + [challenge["creator_id"]])
-    entries = [
-        {
-            "userId": p["user_id"],
-            "displayName": names.get(p["user_id"]),
-            "status": p["status"],
-            "progress": progress.get(p["user_id"], 0),
-            "completed": progress.get(p["user_id"], 0) >= target,
-            "isCurrentUser": p["user_id"] == user_id,
-        }
-        for p in visible
-    ]
-    entries.sort(key=lambda e: (e["status"] != "accepted", -e["progress"]))
-    start, end = _parse_date(challenge["start_date"]), _parse_date(challenge["end_date"])
-    return {
-        "id": challenge["id"],
-        "creatorId": challenge["creator_id"],
-        "creatorName": names.get(challenge["creator_id"]),
-        "title": challenge["title"],
-        "metric": challenge["metric"],
-        "targetValue": target,
-        "startDate": start,
-        "endDate": end,
-        "status": challenge_status(start, end, today),
-        "myStatus": next(p["status"] for p in participants if p["user_id"] == user_id),
-        "rewardXp": XP_REWARDS["challenge"],
-        "participants": entries,
-    }
+
+    built = []
+    for c in challenges:
+        target = c["target_value"]
+        entries = [
+            {
+                "userId": p["user_id"],
+                "displayName": names.get(p["user_id"]),
+                "status": p["status"],
+                "progress": progress[c["id"]].get(p["user_id"], 0),
+                "completed": progress[c["id"]].get(p["user_id"], 0) >= target,
+                "isCurrentUser": p["user_id"] == user_id,
+            }
+            for p in visible[c["id"]]
+        ]
+        entries.sort(key=lambda e: (e["status"] != "accepted", -e["progress"]))
+        start, end = _challenge_window(c)
+        built.append(
+            {
+                "id": c["id"],
+                "creatorId": c["creator_id"],
+                "creatorName": names.get(c["creator_id"]),
+                "title": c["title"],
+                "metric": c["metric"],
+                "targetValue": target,
+                "startDate": start,
+                "endDate": end,
+                "status": challenge_status(start, end, today),
+                "myStatus": next(p["status"] for p in participants[c["id"]] if p["user_id"] == user_id),
+                "rewardXp": XP_REWARDS["challenge"],
+                "participants": entries,
+            }
+        )
+    return built
 
 
 def list_challenges(supabase: Client, user_id: str, today: date) -> list:
     """Challenges the user created, joined or is invited to; declined ones are left out.
 
     Also pays the user's reward for any challenge they have completed. Rewards are paid when the
-    user next views their challenges, and award_xp makes repeat views a no-op.
+    user next views their challenges, and only once per challenge.
     """
     mine = (
         supabase.table("challenge_participants").select("challenge_id").eq("user_id", user_id)
@@ -362,11 +397,20 @@ def list_challenges(supabase: Client, user_id: str, today: date) -> list:
     ):
         participants[row["challenge_id"]].append(row)
 
-    built = [_build_challenge(supabase, c, participants[c["id"]], user_id, today) for c in challenges]
-    for challenge in built:
-        me = next((p for p in challenge["participants"] if p["isCurrentUser"]), None)
-        if me and me["status"] == "accepted" and me["completed"]:
-            award_xp(supabase, user_id, "challenge", XP_REWARDS["challenge"], challenge["id"])
+    built = _build_challenges(supabase, challenges, participants, user_id, today)
+    completed = [
+        c["id"] for c in built
+        if any(p["isCurrentUser"] and p["status"] == "accepted" and p["completed"] for p in c["participants"])
+    ]
+    if completed:
+        paid = {
+            row["source_id"]
+            for row in supabase.table("xp_events").select("source_id").eq("user_id", user_id)
+            .eq("source", "challenge").in_("source_id", completed).execute().data or []
+        }
+        for challenge_id in completed:
+            if challenge_id not in paid:
+                award_xp(supabase, user_id, "challenge", XP_REWARDS["challenge"], challenge_id)
     return built
 
 
@@ -408,7 +452,7 @@ def create_challenge(supabase: Client, user_id: str, data: dict, today: date) ->
         if e.code == PG_FOREIGN_KEY_VIOLATION:
             raise InvalidChallengeError("One or more invited athletes don't exist") from e
         raise
-    return _build_challenge(supabase, challenge, participants, user_id, today)
+    return _build_challenges(supabase, [challenge], {challenge["id"]: participants}, user_id, today)[0]
 
 
 def respond_to_challenge(
@@ -445,4 +489,4 @@ def respond_to_challenge(
         supabase.table("challenge_participants").select("challenge_id,user_id,status")
         .eq("challenge_id", challenge_id).execute().data or []
     )
-    return _build_challenge(supabase, challenge, participants, user_id, today)
+    return _build_challenges(supabase, [challenge], {challenge_id: participants}, user_id, today)[0]

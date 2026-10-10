@@ -3,7 +3,7 @@
  *
  * Everything here is a stand-in: the real server owns XP, streaks, ranks and challenge progress.
  */
-import { GAMIFICATION_RULES as R } from "./config";
+import { GAMIFICATION_RULES as R, checkInXpFor } from "./config";
 import { addDaysISO, todayISO } from "./dates";
 import { challengeSchema, checkInSchema } from "./schemas";
 import type { ApiResult, GamificationApi } from "./api";
@@ -242,8 +242,7 @@ export const mockGamificationApi: GamificationApi = {
     user.currentStreak = user.lastCheckInDate === addDaysISO(-1) ? user.currentStreak + 1 : 1;
     user.longestStreak = Math.max(user.longestStreak, user.currentStreak);
     user.lastCheckInDate = today;
-    const bonusDays = Math.min(user.currentStreak, R.streakBonusCapDays) - 1;
-    const xpAwarded = R.checkInXp + R.streakBonusPerDay * Math.max(bonusDays, 0);
+    const xpAwarded = checkInXpFor(user.currentStreak);
     earn("checkin", xpAwarded);
     applyCheckInToChallenges(xpAwarded);
 
@@ -276,7 +275,7 @@ export const mockGamificationApi: GamificationApi = {
       rank: rankFor(u.totalXp).rank,
       isCurrentUser: u.userId === CURRENT_USER,
     }));
-    return { metric, entries };
+    return { metric, friendCount: userStore().length - 1, entries };
   },
 
   async getXpHistory() {

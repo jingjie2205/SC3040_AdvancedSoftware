@@ -50,6 +50,8 @@ export interface XpEvent {
 
 export interface Leaderboard {
   metric: LeaderboardMetric;
+  /** Accepted friends; 0 means the board can only ever show the user. */
+  friendCount: number;
   entries: LeaderboardEntry[];
 }
 

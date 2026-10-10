@@ -66,7 +66,7 @@ Errors are `{"detail": "<message>"}` (validation errors from FastAPI use its usu
 | GET | `/gamification/me` | Total XP, streak, best streak, rank, XP to next rank, `checkedInToday` |
 | POST | `/gamification/checkins` | Today's check-in `{muscleFatigue, mood, dietAdherence}` (1 to 5). 201, or 409 if already checked in today |
 | GET | `/gamification/xp-events` | The 20 most recent XP awards, newest first |
-| GET | `/gamification/leaderboard?metric=xp\|streak&limit=1..50` | You and your friends (default 10) |
+| GET | `/gamification/leaderboard?metric=xp|streak&limit=1..50` | You and your friends (default 10), plus `friendCount` so the page can show the no-friends screen |\|streak&limit=1..50` | You and your friends (default 10) |
 | GET | `/gamification/challenges` | Challenges you created, joined or are invited to, with everyone's progress. Pays any rewards you've earned |
 | POST | `/gamification/challenges` | Create `{title, metric, targetValue, startDate, endDate, inviteeIds}`. 201, or 422 with a message |
 | POST | `/gamification/challenges/{id}/respond` | `{accept: true\|false}`. 404 if you weren't invited, 409 if already answered or the challenge ended |

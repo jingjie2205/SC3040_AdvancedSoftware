@@ -57,10 +57,10 @@ async def get_leaderboard(
     user_id: str = Depends(get_current_user_id),
 ) -> Any:
     """The user and their friends, ranked by XP or by current check-in streak."""
-    entries = gamification_service.get_leaderboard(
+    board = gamification_service.get_leaderboard(
         get_supabase_admin(), user_id, metric, limit, gamification_service.today_local()
     )
-    return {"metric": metric, "entries": entries}
+    return {"metric": metric, **board}
 
 
 @router.get("/challenges", response_model=ChallengeListResponse)

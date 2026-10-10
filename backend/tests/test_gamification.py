@@ -302,7 +302,7 @@ def test_leaderboard_by_xp_orders_and_flags_current_user(sb):
     svc.award_xp(sb, BOB, "workout", 50, str(uuid.uuid4()))
     svc.award_xp(sb, BOB, "meal", 10, str(uuid.uuid4()))
 
-    entries = svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)
+    entries = svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)["entries"]
 
     # Carol is a friend without XP yet, so she is listed last with 0
     assert [(e["userId"], e["totalXp"]) for e in entries] == [(BOB, 60), (ALICE, 50), (CAROL, 0)]
@@ -315,7 +315,7 @@ def test_leaderboard_by_streak_excludes_broken_streaks(sb):
         svc.perform_checkin(sb, ALICE, METRICS, TODAY - timedelta(days=offset))
     svc.perform_checkin(sb, BOB, METRICS, TODAY)
 
-    entries = svc.get_leaderboard(sb, ALICE, LeaderboardMetric.STREAK, 10, TODAY)
+    entries = svc.get_leaderboard(sb, ALICE, LeaderboardMetric.STREAK, 10, TODAY)["entries"]
 
     assert [e["userId"] for e in entries] == [BOB]
 
@@ -602,7 +602,7 @@ def test_profile_names_are_shown_when_set(sb):
     svc.award_xp(sb, BOB, "meal", 10, str(uuid.uuid4()))
     challenge = make_challenge(sb)
 
-    names = {e["userId"]: e["displayName"] for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)}
+    names = {e["userId"]: e["displayName"] for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)["entries"]}
     assert names == {ALICE: None, BOB: "Bob Tan", CAROL: None}
     assert {p["userId"]: p["displayName"] for p in challenge["participants"]} == {ALICE: None, BOB: "Bob Tan"}
     assert challenge["creatorName"] is None
@@ -632,9 +632,9 @@ def test_leaderboard_shows_only_the_user_and_their_friends(sb):
         svc.award_xp(sb, uid, "meal", 10, str(uuid.uuid4()))
     svc.perform_checkin(sb, DAVE, METRICS, TODAY)
 
-    by_xp = {e["userId"] for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)}
-    by_streak = {e["userId"] for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.STREAK, 10, TODAY)}
-    dave_view = [e["userId"] for e in svc.get_leaderboard(sb, DAVE, LeaderboardMetric.XP, 10, TODAY)]
+    by_xp = {e["userId"] for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 10, TODAY)["entries"]}
+    by_streak = {e["userId"] for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.STREAK, 10, TODAY)["entries"]}
+    dave_view = [e["userId"] for e in svc.get_leaderboard(sb, DAVE, LeaderboardMetric.XP, 10, TODAY)["entries"]]
 
     assert by_xp == {ALICE, BOB, CAROL}
     assert by_streak == set()
@@ -642,7 +642,7 @@ def test_leaderboard_shows_only_the_user_and_their_friends(sb):
 
 
 def test_leaderboard_limit_applies_after_adding_friends_without_xp(sb):
-    entries = svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 2, TODAY)
+    entries = svc.get_leaderboard(sb, ALICE, LeaderboardMetric.XP, 2, TODAY)["entries"]
     assert len(entries) == 2
 
 
@@ -680,3 +680,48 @@ def test_calendar_dates_come_from_the_questionnaire_check_ins(client, sb, monkey
 
     assert body == {"user_id": ALICE, "dates": [(TODAY - timedelta(days=1)).isoformat(), TODAY.isoformat()]}
     assert client.post("/checkin/me").status_code == 404  # one-click check-in was removed
+
+
+def count_queries(sb, monkeypatch):
+    calls = []
+    table, rpc = sb.table, sb.rpc
+    monkeypatch.setattr(sb, "table", lambda name: calls.append(name) or table(name))
+    monkeypatch.setattr(sb, "rpc", lambda name, params: calls.append(name) or rpc(name, params))
+    return calls
+
+
+@pytest.mark.parametrize("metric", ["xp", "sessions", "checkin_streak"])
+def test_listing_challenges_uses_the_same_number_of_queries_for_1_or_10(sb, monkeypatch, metric):
+    def queries_for(n):
+        fake = FakeSupabase()
+        befriend(fake, ALICE, BOB)
+        for i in range(n):
+            make_challenge(fake, metric=metric, target=1, invitees=(BOB,))
+            svc.respond_to_challenge(fake, BOB, fake.db["challenges"][-1]["id"], True, TODAY)
+            add_xp_event(fake, BOB, "workout", 50, datetime(2026, 10, 5, 4, i, tzinfo=timezone.utc))
+        svc.perform_checkin(fake, BOB, METRICS, TODAY)
+        svc.list_challenges(fake, BOB, TODAY)  # pays the rewards, so the timed call below is steady state
+        calls = count_queries(fake, monkeypatch)
+        svc.list_challenges(fake, BOB, TODAY)
+        return len(calls)
+
+    assert queries_for(10) == queries_for(1)
+
+
+def test_batched_progress_keeps_each_challenge_window_separate(sb):
+    early = make_challenge(sb, metric="xp", target=1000, end=TODAY + timedelta(days=1))
+    late = make_challenge(sb, metric="xp", target=1000, start=TODAY + timedelta(days=2), end=TODAY + timedelta(days=3))
+    add_xp_event(sb, ALICE, "meal", 10, datetime(2026, 10, 5, 4, 0, tzinfo=timezone.utc))
+    add_xp_event(sb, ALICE, "meal", 20, datetime(2026, 10, 7, 4, 0, tzinfo=timezone.utc))
+
+    mine = {c["id"]: c["participants"][0]["progress"] for c in svc.list_challenges(sb, ALICE, TODAY)}
+
+    assert mine == {early["id"]: 10, late["id"]: 20}
+
+
+def test_leaderboard_reports_how_many_friends_the_user_has(client, sb):
+    befriend(sb, DAVE, ALICE, status="pending")
+
+    assert svc.get_leaderboard(sb, DAVE, LeaderboardMetric.STREAK, 10, TODAY)["friendCount"] == 0
+    board = client.get("/gamification/leaderboard", params={"metric": "streak"}).json()
+    assert board["friendCount"] == 2

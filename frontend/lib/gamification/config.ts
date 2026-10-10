@@ -24,3 +24,9 @@ export const GAMIFICATION_RULES = {
     [4000, "Platinum"],
   ],
 } as const;
+
+/** XP for the check-in that makes the streak `streak` days long. Mirrors checkin_xp on the server. */
+export function checkInXpFor(streak: number): number {
+  const bonusDays = Math.max(Math.min(streak, GAMIFICATION_RULES.streakBonusCapDays) - 1, 0);
+  return GAMIFICATION_RULES.checkInXp + GAMIFICATION_RULES.streakBonusPerDay * bonusDays;
+}
