@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 # Postgres and PostgREST codes for "that table or column doesn't exist (yet)".
 _SCHEMA_NOT_READY = {"42P01", "42703", "PGRST204", "PGRST205"}
+# ...and for "that function doesn't exist (yet)": PostgREST's own code, and Postgres's undefined_function.
+_FUNCTION_NOT_READY = _SCHEMA_NOT_READY | {"PGRST202", "42883"}
 
 # The check-in questionnaire dates a check-in with a fixed UTC+8 day, while "today" here is the
 # user's own local date. For someone west of Singapore a check-in made this evening can be dated
@@ -113,6 +115,7 @@ def changes_payload(changes: ChangeSet) -> Dict[str, Any]:
 class SupabaseTrainingRepository:
     def __init__(self, client: Client) -> None:
         self.db = client
+        self._calories_ready = False  # set once the workout log is seen to have its calories column
 
     # ------------------------------------------------------------------ helpers
 
@@ -317,10 +320,36 @@ class SupabaseTrainingRepository:
     # ------------------------------------------------------------------ writes
 
     def apply(self, user_id: str, changes: ChangeSet) -> None:
+        if any(workout.calories is not None for workout in changes.insert_workouts):
+            self._require_calories_support()
         self.db.rpc(
             "training_apply_changes",
             {"p_user_id": user_id, "p_changes": changes_payload(changes)},
         ).execute()
+
+    def _require_calories_support(self) -> None:
+        """
+        The write function skips keys it doesn't know, so on a database whose write function predates the calories
+        migration a log would save and the calories the athlete typed would quietly vanish, even if someone has added
+        the column by hand (the live project had). The migration adds training_schema_features(); ask it first and
+        refuse instead. Once the answer has been yes it isn't asked again.
+        """
+        if self._calories_ready:
+            return
+        refusal = TrainingError(
+            "UNAVAILABLE",
+            "Calories aren't set up on this database yet. Apply the latest training migration, "
+            "or log the workout without calories.",
+        )
+        try:
+            features = self.db.rpc("training_schema_features", {}).execute().data
+        except APIError as error:
+            if error.code not in _FUNCTION_NOT_READY:
+                raise
+            raise refusal from error
+        if not (isinstance(features, dict) and features.get("calories") is True):
+            raise refusal
+        self._calories_ready = True
 
 
 class ThreadLocalClient:

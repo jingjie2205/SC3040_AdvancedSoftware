@@ -41,14 +41,27 @@ class MoveRefusal:
 
 
 def _find_refusal(
+    session: PlannedSession,
+    target: date,
+    ctx: MoveContext,
+    rules: TrainingRules,
+    *,
+    moving: bool = True,
+) -> Optional[Tuple[MoveRefusalCode, str]]:
+    if moving:
+        if session.status not in MOVABLE_STATUSES:
+            return "NOT_MOVABLE", "Completed, partial and missed sessions can't be moved."
+        if target == session.date:
+            return "NO_CHANGE", "That session is already on this day."
+    return _placement_refusal(session, target, ctx, rules)
+
+
+def _placement_refusal(
     session: PlannedSession, target: date, ctx: MoveContext, rules: TrainingRules
 ) -> Optional[Tuple[MoveRefusalCode, str]]:
-    if session.status not in MOVABLE_STATUSES:
-        return "NOT_MOVABLE", "Completed, partial and missed sessions can't be moved."
-    if target == session.date:
-        return "NO_CHANGE", "That session is already on this day."
+    """Whether `session` may sit on `target`: today or later, inside the plan, on a free day, with no push beside a push."""
     if target < ctx.today:
-        return "IN_PAST", "Sessions can't be moved to a past date."
+        return "IN_PAST", "A session can't be on a day that has already passed."
     if target < ctx.plan_start or target > ctx.plan_end:
         return "OUT_OF_PLAN", "That date is outside your plan."
 
@@ -72,28 +85,61 @@ def _find_refusal(
 
 
 def nearest_valid_date(
-    session: PlannedSession, target: date, ctx: MoveContext, rules: TrainingRules = RULES
+    session: PlannedSession,
+    target: date,
+    ctx: MoveContext,
+    rules: TrainingRules = RULES,
+    *,
+    moving: bool = True,
 ) -> Optional[date]:
     """Nearest day to `target` (the later day on a tie) where the move would be allowed."""
     for offset in range(1, rules.move_search_days + 1):
         for candidate in (target + timedelta(days=offset), target - timedelta(days=offset)):
-            if _find_refusal(session, candidate, ctx, rules) is None:
+            if _find_refusal(session, candidate, ctx, rules, moving=moving) is None:
                 return candidate
     return None
+
+
+def _check(
+    session: PlannedSession, target: date, ctx: MoveContext, rules: TrainingRules, *, moving: bool
+) -> Optional[MoveRefusal]:
+    refusal = _find_refusal(session, target, ctx, rules, moving=moving)
+    if refusal is None:
+        return None
+    code, reason = refusal
+    suggestion = None
+    if code not in ("NOT_MOVABLE", "NO_CHANGE"):
+        suggestion = nearest_valid_date(session, target, ctx, rules, moving=moving)
+    return MoveRefusal(code=code, reason=reason, suggested_date=suggestion)
 
 
 def check_move(
     session: PlannedSession, target: date, ctx: MoveContext, rules: TrainingRules = RULES
 ) -> Optional[MoveRefusal]:
     """None if the move is allowed, otherwise why not, with the nearest valid day when one helps."""
-    refusal = _find_refusal(session, target, ctx, rules)
-    if refusal is None:
-        return None
-    code, reason = refusal
-    suggestion = None
-    if code not in ("NOT_MOVABLE", "NO_CHANGE"):
-        suggestion = nearest_valid_date(session, target, ctx, rules)
-    return MoveRefusal(code=code, reason=reason, suggested_date=suggestion)
+    return _check(session, target, ctx, rules, moving=True)
+
+
+def check_placement(
+    session: PlannedSession, target: date, ctx: MoveContext, rules: TrainingRules = RULES
+) -> Optional[MoveRefusal]:
+    """
+    The day rules for a session that isn't on the calendar yet, or one whose intensity is changing where it stands:
+    today or later, inside the plan, a free day, and no push beside a push. Nothing about a move (it isn't one).
+    """
+    return _check(session, target, ctx, rules, moving=False)
+
+
+def band_refusal(band: IntensityBand, deload_week: bool) -> Optional[str]:
+    """
+    Why a hand-planned session can't have this intensity in this week, or None. The plan's deload weeks stay all-deload
+    and its other weeks never hold a deload, which is how the generator builds them and how the Plan tab labels a week.
+    """
+    if deload_week and band != "deload":
+        return "This is a deload week, so its sessions stay at Deload intensity."
+    if not deload_week and band == "deload":
+        return "Deload is only for deload weeks. Pick Light or Push."
+    return None
 
 
 def reconcile(

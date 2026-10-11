@@ -4,7 +4,7 @@ from typing import List
 import pytest
 
 from app.training.models import PlannedSession, ReadinessScore
-from app.training.rules import MoveContext, check_move, reconcile
+from app.training.rules import MoveContext, band_refusal, check_move, check_placement, reconcile
 
 TODAY = date(2026, 9, 30)  # Wednesday
 PLAN_START = date(2026, 9, 14)
@@ -84,6 +84,85 @@ def test_a_missed_push_does_not_block_the_adjacent_day():
     missed_push = session(date(2026, 10, 19), "push", status="missed")
     push = session(date(2026, 10, 15), "push")
     assert check_move(push, date(2026, 10, 18), ctx([missed_push, push])) is None
+
+
+# ------------------------------------------------------------------ placing a session by hand
+
+
+def new_session(day: date, band: str = "light", sid: str = "new") -> PlannedSession:
+    return session(day, band, sid=sid)
+
+
+def test_a_new_session_may_go_on_a_free_day_in_the_plan_and_on_today():
+    for day in (TODAY, date(2026, 10, 3), PLAN_END):
+        assert check_placement(new_session(day), day, ctx([])) is None
+
+
+def test_a_new_session_cannot_go_in_the_past():
+    refusal = check_placement(new_session(TODAY - timedelta(days=1)), TODAY - timedelta(days=1), ctx([]))
+    assert refusal.code == "IN_PAST"
+    assert refusal.suggested_date == TODAY  # the nearest day that works
+
+
+def test_a_new_session_cannot_go_outside_the_plan():
+    after = PLAN_END + timedelta(days=1)
+    assert check_placement(new_session(after), after, ctx([])).code == "OUT_OF_PLAN"
+    before_start = MoveContext(sessions=[], plan_start=date(2026, 10, 12), plan_end=PLAN_END, today=TODAY)
+    assert check_placement(new_session(date(2026, 10, 10)), date(2026, 10, 10), before_start).code == "OUT_OF_PLAN"
+
+
+@pytest.mark.parametrize("status", ["planned", "accepted", "moved", "completed", "partial", "missed"])
+def test_a_session_in_any_state_takes_its_day_and_the_refusal_names_the_nearest_free_one(status):
+    other = session(date(2026, 10, 3), status=status)
+    refusal = check_placement(new_session(other.date), other.date, ctx([other]))
+    assert refusal.code == "DAY_OCCUPIED"
+    assert refusal.suggested_date == date(2026, 10, 4)  # the later day wins a tie
+    assert check_placement(new_session(refusal.suggested_date), refusal.suggested_date, ctx([other])) is None
+
+
+def test_a_new_push_cannot_sit_beside_a_push_and_is_pointed_to_a_day_that_works():
+    neighbours = [session(date(2026, 10, 19), "push")]
+    refusal = check_placement(new_session(date(2026, 10, 18), "push"), date(2026, 10, 18), ctx(neighbours))
+    assert refusal.code == "CONSECUTIVE_HIGH_INTENSITY"
+    assert refusal.suggested_date == date(2026, 10, 17)
+    assert check_placement(new_session(refusal.suggested_date, "push"), refusal.suggested_date, ctx(neighbours)) is None
+
+
+def test_a_new_light_session_may_sit_beside_a_push():
+    neighbours = [session(date(2026, 10, 19), "push")]
+    assert check_placement(new_session(date(2026, 10, 18), "light"), date(2026, 10, 18), ctx(neighbours)) is None
+
+
+def test_a_push_the_day_after_a_finished_push_is_refused_but_not_after_a_missed_one():
+    done = session(date(2026, 10, 19), "push", status="completed")
+    missed = session(date(2026, 10, 19), "push", status="missed")
+    day = date(2026, 10, 20)
+    assert check_placement(new_session(day, "push"), day, ctx([done])).code == "CONSECUTIVE_HIGH_INTENSITY"
+    assert check_placement(new_session(day, "push"), day, ctx([missed])) is None
+
+
+def test_changing_a_session_to_push_where_it_stands_is_checked_against_its_neighbours_not_itself():
+    mine = session(date(2026, 10, 17), "light", sid="mine")
+    next_door = session(date(2026, 10, 18), "push")
+    as_push = mine.model_copy(update={"intensity_band": "push"})
+    assert check_placement(as_push, as_push.date, ctx([mine, next_door])).code == "CONSECUTIVE_HIGH_INTENSITY"
+    assert check_placement(as_push, as_push.date, ctx([mine])) is None  # its own day isn't "occupied"
+
+
+def test_a_session_on_a_day_of_its_own_choice_is_not_a_no_change():
+    """Moving refuses staying put; placing a new session on the day it was drafted for is exactly the point."""
+    day = date(2026, 10, 3)
+    assert check_placement(new_session(day), day, ctx([])) is None
+    assert check_move(new_session(day), day, ctx([])).code == "NO_CHANGE"
+
+
+def test_deload_weeks_take_only_deload_sessions_and_other_weeks_never_do():
+    assert band_refusal("deload", deload_week=True) is None
+    assert "deload week" in band_refusal("push", deload_week=True)
+    assert "deload week" in band_refusal("light", deload_week=True)
+    assert band_refusal("push", deload_week=False) is None
+    assert band_refusal("light", deload_week=False) is None
+    assert "Deload is only for deload weeks" in band_refusal("deload", deload_week=False)
 
 
 # ------------------------------------------------------------------ reconciliation (Hard Rule 2)

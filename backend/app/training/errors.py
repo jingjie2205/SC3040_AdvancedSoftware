@@ -18,6 +18,7 @@ ErrorCode = Literal[
     "OUT_OF_PLAN",
     "DAY_OCCUPIED",
     "CONSECUTIVE_HIGH_INTENSITY",
+    "WEEK_FULL",
     "UNAVAILABLE",
     "RATE_LIMITED",
     "NOT_CONNECTED",

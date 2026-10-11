@@ -6,12 +6,19 @@ import { TRAINING_RULES as R } from "./config";
 import { addDays, diffDays, startOfWeek } from "./dates";
 import type { TrainingPreferencesInput } from "./schemas";
 import { WEEKDAYS } from "./types";
-import type { ActivityType, Goal, IntensityBand, PlannedSession, WorkoutSession } from "./types";
+import type {
+  ActivityType,
+  Goal,
+  IntensityBand,
+  PlannedSession,
+  TrainingPlan,
+  WorkoutSession,
+} from "./types";
 
-const BAND_WEIGHT: Record<IntensityBand, number> = { push: 1, light: 0.7, deload: 0.6 };
-const DURATION_FACTOR: Record<IntensityBand, number> = { push: 1, light: 0.75, deload: 0.6 };
+const BAND_WEIGHT: Record<IntensityBand, number> = R.bandWeight;
+const DURATION_FACTOR: Record<IntensityBand, number> = R.bandDurationFactor;
 
-const roundTo5 = (n: number) => Math.max(15, Math.round(n / 5) * 5);
+const roundTo5 = (n: number) => Math.max(R.sessionDurationMin.min, Math.round(n / 5) * 5);
 
 /** Mirrors the backend: a goal gives the activities it favours extra turns in the weekly rotation. */
 const GOAL_TURNS: Record<Goal, Partial<Record<ActivityType, number>>> = {
@@ -108,9 +115,14 @@ interface BuildArgs {
   goal?: Goal | null;
 }
 
+/** How many sessions a full week of the plan has: the days wanted, or every free day if there are fewer. */
+export function sessionsPerWeek(prefs: Pick<TrainingPreferencesInput, "daysPerWeek" | "restDays">): number {
+  return Math.min(prefs.daysPerWeek, WEEKDAYS.filter((day) => !prefs.restDays.includes(day)).length);
+}
+
 export function buildSessions({ prefs, startDate, targets, fromDate, goal = null }: BuildArgs): SessionDraft[] {
   const available = WEEKDAYS.flatMap((day, index) => (prefs.restDays.includes(day) ? [] : [index]));
-  const perWeek = Math.min(prefs.daysPerWeek, available.length);
+  const perWeek = sessionsPerWeek(prefs);
   if (perWeek === 0) return [];
   const rotation = activityRotation(prefs.activityTypes, goal);
 
@@ -149,6 +161,87 @@ export function buildSessions({ prefs, startDate, targets, fromDate, goal = null
     }
   });
   return drafts;
+}
+
+/**
+ * The load the plan itself set for the Monday-to-Sunday week starting `weekMonday`, or null for a week it doesn't
+ * cover or one an adaptation has already left behind. Mirrors the server's `plan_week_target`.
+ */
+export function planWeekTarget(plan: TrainingPlan, weekMonday: string): number | null {
+  const index = Math.floor(diffDays(weekMonday, plan.startDate) / 7);
+  if (index < 0 || index >= plan.weeks) return null;
+  const elapsed = plan.lastAdaptation
+    ? Math.max(0, Math.floor(diffDays(startOfWeek(plan.lastAdaptation.adaptedOn), plan.startDate) / 7))
+    : 0;
+  if (index < elapsed) return null;
+  return weeklyTargets(plan.baselineVolume, plan.weeks - elapsed, elapsed)[index - elapsed].volume;
+}
+
+/** What a session counts for when a week's load is shared out: intensity times length. */
+export const weightOf = (band: IntensityBand, minutes: number) => BAND_WEIGHT[band] * minutes;
+
+/**
+ * The points a week's sessions still to do share once there are `sessionsAfter` of them. The week carries the plan's
+ * load (`target`) with the usual number of sessions (`perWeek`) and a proportional share with fewer, as the generator
+ * builds a week that is already partly gone. Mirrors the server's `week_pool`.
+ */
+export function weekPool(
+  target: number,
+  finished: number,
+  now: number,
+  sessionsAfter: number,
+  perWeek: number,
+): number {
+  const usual = perWeek > 0 ? Math.round((target * sessionsAfter) / perWeek) : target;
+  return Math.max(now, Math.min(target - finished, usual));
+}
+
+export interface WeekShare {
+  newVolume: number;
+  others: Record<string, number>;
+}
+
+/** `total` in whole points in proportion to `basis`, adding up exactly: the biggest remainders get the spare points. */
+function split(total: number, basis: number[]): number[] {
+  if (basis.length === 0) return [];
+  const sum = basis.reduce((a, b) => a + b, 0);
+  const exact = basis.map((part) => (total * part) / sum);
+  const parts = exact.map((value) => Math.floor(value));
+  const byRemainder = parts
+    .map((_, i) => i)
+    .sort((a, b) => exact[b] - parts[b] - (exact[a] - parts[a]) || a - b);
+  const spare = total - parts.reduce((a, b) => a + b, 0);
+  for (const i of byRemainder.slice(0, spare)) parts[i] += 1;
+  return parts;
+}
+
+/**
+ * A session joins a week that has `pool` points left to do, or one already in it changes weight. It takes its share
+ * by weight, and the others keep their proportions to one another and split what is left, so the week still adds up
+ * to `pool`. Every session keeps at least one point. Mirrors the server's `share_week`.
+ */
+export function shareWeek(
+  pool: number,
+  others: { id: string; volume: number; weight: number }[],
+  newWeight: number,
+): WeekShare {
+  const totalWeight = others.reduce((sum, s) => sum + s.weight, 0) + newWeight;
+  const newVolume = Math.round((pool * newWeight) / totalWeight);
+  const current = others.map((s) => s.volume);
+  const basis = current.reduce((a, b) => a + b, 0) > 0 ? current : others.map((s) => s.weight);
+  const volumes = [newVolume, ...split(Math.max(pool - newVolume, 0), basis)];
+  for (let i = 0; i < volumes.length; i++) {
+    while (volumes[i] < 1) {
+      const donor = volumes.indexOf(Math.max(...volumes));
+      if (volumes[donor] <= 1) break;
+      volumes[donor] -= 1;
+      volumes[i] += 1;
+    }
+  }
+  return {
+    newVolume: volumes[0],
+    others: Object.fromEntries(others.map((s, i) => [s.id, volumes[i + 1]])),
+  };
 }
 
 /** Session targets after readiness pulls it to a different band. */

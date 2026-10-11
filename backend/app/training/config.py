@@ -81,6 +81,8 @@ class TrainingRules:
     workout_rpe_max: int = 10
     workout_hr_min: int = 30
     workout_hr_max: int = 230
+    # Calories the athlete may enter for one logged workout: well beyond a ten-hour effort, so it only stops typos.
+    workout_calories_max: int = 20000
 
     # A saved Strava activity gets its schedule "pts" from how long it took: this many points a minute, whatever
     # the activity. A plain, visible rule, and the card shows the result before anything is saved.

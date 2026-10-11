@@ -16,15 +16,16 @@ local date as `X-Client-Date: YYYY-MM-DD` so "today" matches theirs (the server 
 | POST | `/training/plan/recalculate` | T-8 adapt from what was completed |
 | POST | `/training/plan/adaptation/acknowledge` | Dismiss the "your plan was adapted" notice |
 | GET | `/training/schedule?from=&to=` | T-6 sessions and workouts in a range (max 200 days) |
-| PATCH | `/training/sessions/{id}` | T-7 reschedule `{date}` |
+| PATCH | `/training/sessions/{id}` | T-7 reschedule `{date}`, or change the session where it stands: any of `{activityType, intensityBand, targetDurationMin}`. A request asks for a move or for a change, never both and never neither (422) |
+| POST | `/training/plan/sessions` | Plan a session by hand on a free day of the active plan `{date, activityType, intensityBand, targetDurationMin?}`. Answers `{session, adjustedCount}`. See "Planning the schedule by hand" |
 | DELETE | `/training/sessions/{id}` | T-7 remove; spreads its volume over the rest of the week |
 | GET | `/training/today` | T-3/T-4 readiness plus today's reconciled workout |
 | GET | `/training/summary` | One call for the Home page: readiness, today's session, the week so far and what is next |
 | POST | `/training/coach` | A short note about today from Gemini, or a built-in message. 429 if asked again too fast |
 | PUT / DELETE | `/training/sleep` | Last night's sleep `{hours}` (0 to 16), filed under the user's today; it feeds today's readiness. DELETE removes it |
 | POST | `/training/sessions/{id}/respond` | T-4 accept / swap / skip |
-| POST | `/training/sessions/{id}/log` | T-5 log a planned session |
-| POST | `/training/sessions` | T-5 log an ad hoc session |
+| POST | `/training/sessions/{id}/log` | T-5 log a planned session `{date, activityType, actualDurationMin, actualVolume, rpe?, avgHr?, calories?}`. `calories` is optional: whole kcal, 0 to 20,000 (`config.workout_calories_max`) |
+| POST | `/training/sessions` | T-5 log an ad hoc session (same body). Calories come back on the workout in `GET /training/schedule`, where the Home page reads them |
 | GET | `/training/strava/status` | The Strava tab: whether Strava is connected, and how many activities from it are on the schedule. No call to Strava |
 | POST | `/training/strava/pull` | "Upload Strava data": the latest 100 Strava activities as cards, newest first, each saying how it would be saved and whether it already is. Saves nothing. 409 `NOT_CONNECTED`, 429, 503 |
 | POST | `/training/strava/save` | "Save to schedule" `{stravaIds}` (1 to 100): saves those activities as training logs (`source = 'strava'`). Asks Strava again, so what is saved is what Strava said. Safe to repeat. Answers `{savedIds, alreadySaved, skipped}` |
@@ -41,8 +42,8 @@ failures use the same shape (status 422), including request-body validation on t
 |---|---|
 | `config.py` | Every tunable rule (thresholds, intervals, triggers). Change numbers here only |
 | `models.py` | Pydantic models, camelCase on the wire, no user id inside any of them |
-| `planner.py` | Baseline, periodisation, session placement. Pure functions |
-| `rules.py` | Can a session move? Readiness vs plan reconciliation. Pure functions |
+| `planner.py` | Baseline, periodisation, session placement, and the load a week carries when its sessions are planned by hand. Pure functions |
+| `rules.py` | Can a session move or be placed on a day? Which intensities a week allows. Readiness vs plan reconciliation. Pure functions |
 | `readiness.py` | Feature builder and the `ReadinessScorer` interface with the rule-based scorer |
 | `coach.py` | The AI coach: the fixed facts it may be given, the prompt, the Gemini client and the built-in fallback |
 | `ml/` | Stage 2: the trained readiness model, its training pipeline and its fallback. Start with `ml/README.md` |
@@ -90,12 +91,22 @@ failures use the same shape (status 422), including request-body validation on t
      so each saved Strava activity would earn 50 XP (and "Save all" up to 5,000, again after every removal, and
      challenge progress with it). It **is safe to run again**, and it is the one change here to another
      owner's code, flagged to Yew Yi in the PR that added it. It leaves existing XP alone.
+   - `supabase/migrations/20261011200000_training_logs_calories.sql` lets a logged workout keep the calories the
+     athlete typed. The live project already had a hand-added `calories` column on `training_workout_logs`
+     (bigint, nullable, a few values in it) that nothing in the repo created or wrote, so the column is only
+     added where it is missing and an existing one is left as it is; a range check is added either way, the write
+     function `training_apply_changes` is replaced with the same body plus calories in the workout insert, and
+     `training_schema_features()` is added, which the backend asks before it accepts calories (it answers
+     `{"calories": true}` only once the write function keeps them, which the column alone doesn't prove). It **is safe
+     to run again** and changes no existing row.
 
    The backend copes with a database that hasn't had the second one yet (preferences save without exam
    dates, sleep reads as missing, plans save without a goal), but logging sleep or saving an exam date then
    answers 503 with a message saying to apply it. Saving from the Strava tab answers 503 the same way until the
    third (pulling and showing cards needs no migration; the schedule just can't hold a Strava log before it).
    Apply the fourth before anyone saves Strava activities on a project that has the gamification trigger.
+   Logging a workout **with** calories answers 503 ("Calories aren't set up on this database yet") until the fifth
+   is applied, instead of saving the log and losing the number; a log without calories is never affected.
 3. **Check it landed.** In the SQL editor:
    ```sql
    select tablename, rowsecurity from pg_tables
@@ -159,7 +170,36 @@ harness isn't part of the repo.
   its feature fingerprint and the scorer's version are unchanged, so new history, a new check-in or a
   switch between the model and the rules recomputes it without explicit invalidation.
 - **Baselines use the last 4 complete calendar weeks**, so no week is cut in half.
-- **One planned session per user per day**, enforced in the database.
+- **One planned session per user per day**, enforced in the database across every plan, so a finished session
+  from a replaced plan still takes its day. The move and add rules look at every session the user has in and
+  around the plan's days, not only the active plan's (a move onto such a day used to reach the database and fail
+  there as a 500; now it is refused as `DAY_OCCUPIED` with the nearest free day).
+- **Planning the schedule by hand** (`POST /training/plan/sessions`, and `PATCH` with details). Nothing here
+  needs a migration: a hand-planned session is an ordinary `planned_sessions` row of the active plan.
+  - *Where and what.* On a free day from today to the plan's end, no push beside a push (the move rules, with the
+    nearest valid day suggested), one of the athlete's own activities, and a length of `session_duration_min` to
+    `session_duration_max` (left out, it is the preferred length scaled by the intensity, as the generator does).
+    A deload week (every `deload_every_n_weeks`th week of the plan, adaptation or not) takes only `deload`
+    sessions and every other week takes `push` or `light`, because that is how the generator builds a week and
+    how the Plan tab labels one. Field problems come back as 422 `VALIDATION` with `fieldErrors`.
+  - *How much load.* The plan decides what a week carries (`planner.plan_week_target`): its whole load with the
+    usual number of sessions (`sessions_per_week`, from the preferences) and a proportional share with fewer,
+    as the generator builds a week that is already partly gone (`planner.week_pool`). A new session takes its
+    share of that by weight, which is intensity times length (`share_week`), and the week's other sessions keep
+    their proportions to each other and give up the rest, so the week adds up exactly. Beyond the usual number
+    of sessions the load is only shared, never grown, and a week that already holds more is never cut down.
+    Sessions already done or missed have used up their part (`WEEK_FULL`, 409, when nothing is left; the
+    athlete can still log the workout as an extra one). It is the mirror of removing a session, which spreads
+    its points over the rest of the week.
+  - *Changing a session* (activity, intensity, length) works in place on a planned, accepted or moved session of
+    the active plan. Only a different intensity or length changes its share, and then the week's total stays what
+    it was. Its status is kept. Changing the day is the existing move.
+  - *Adapt and Replace rebuild the weeks still to come*, so sessions planned or moved by hand in them are rebuilt
+    with the rest (the Plan tab says so). Keeping them would need a marker on the session row (a migration).
+  - Tests: `test_training_manual_planning.py` (and the new cases in `test_training_planner.py`,
+    `test_training_rules.py`, `test_training_api.py`). The Python rules and their TypeScript copies in
+    `frontend/lib/training/mock-plan.ts` and `rules.ts` were also run against each other on 13,000 random cases
+    with no difference (the check isn't part of the repo), and the constants they share are pinned by a test.
 - **The daily check-in feeds readiness.** The check-in rating is `daily_checkins.muscle_fatigue` from
   the gamification questionnaire ("How sore are your muscles?", 1 "Fresh" to 5 "Very sore", so higher
   is worse, the same direction as the score expects). Only that column and the date are read, only for the
@@ -317,6 +357,11 @@ saves the ones the athlete chooses to their **schedule** as training logs.
 
 ## Not built yet, and who it depends on
 
+- **Keeping hand-planned sessions through Adapt and Replace.** They are rebuilt with the weeks still to come
+  (see "Planning the schedule by hand"). Telling them apart from generated ones needs a marker column on
+  `planned_sessions`, which is a migration, and the generator would have to plan around them.
+- **Drag and drop on the calendar, and swapping two sessions' days.** Moving is one session at a time through
+  the Move dialog.
 - **Resting heart rate.** The spec lists resting and average heart rate. Nothing in the app records a
   resting rate (the check-in has no such question and a logged workout carries its average only), so the
   heart rate factor is the trend in average heart rate across logged sessions. Entering a resting rate

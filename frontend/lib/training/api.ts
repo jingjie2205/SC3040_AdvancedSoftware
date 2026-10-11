@@ -10,7 +10,12 @@
 import { httpTrainingApi } from "./http-api";
 import { mockTrainingApi } from "./mock-api";
 import type { MoveRefusalCode } from "./rules";
-import type { LogWorkoutInput, TrainingPreferencesInput } from "./schemas";
+import type {
+  AddSessionInput,
+  LogWorkoutInput,
+  SessionChange,
+  TrainingPreferencesInput,
+} from "./schemas";
 import type {
   ActivityType,
   CoachMessage,
@@ -38,6 +43,7 @@ export type ApiErrorCode =
   | "UNAVAILABLE"
   | "RATE_LIMITED"
   | "NOT_CONNECTED"
+  | "WEEK_FULL"
   | "NETWORK"
   | "SERVER_ERROR"
   | MoveRefusalCode;
@@ -72,6 +78,12 @@ export interface RemoveResult {
   redistributedCount: number;
 }
 
+export interface AddSessionResult {
+  session: PlannedSession;
+  /** How many of that week's other sessions had their points changed to make room for it. */
+  adjustedCount: number;
+}
+
 export interface TrainingApi {
   getPreferences(): Promise<TrainingPreferences | null>;
   savePreferences(input: TrainingPreferencesInput): Promise<ApiResult<TrainingPreferences>>;
@@ -84,6 +96,13 @@ export interface TrainingApi {
   getSchedule(from: string, to: string): Promise<Schedule>;
   rescheduleSession(id: string, newDate: string): Promise<ApiResult<PlannedSession>>;
   removeSession(id: string): Promise<ApiResult<RemoveResult>>;
+  /**
+   * Plan a session by hand on a free day of the active plan. The week's load stays the plan's own: the new session
+   * takes its share and the week's other sessions give up a little to make room.
+   */
+  addSession(input: AddSessionInput): Promise<ApiResult<AddSessionResult>>;
+  /** Change a planned session's activity, intensity or length where it stands (moving it is `rescheduleSession`). */
+  updateSession(id: string, change: SessionChange): Promise<ApiResult<PlannedSession>>;
 
   getToday(): Promise<TodayView>;
   /** One read for the Home page: readiness, today's session, the week so far and what is next. */
