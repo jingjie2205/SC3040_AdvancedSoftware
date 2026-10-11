@@ -4,7 +4,7 @@ Plan generation as pure functions: no I/O, same inputs give the same plan.
 import math
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .config import RULES, TrainingRules
 from .models import (
@@ -12,6 +12,7 @@ from .models import (
     ActivityType,
     IntensityBand,
     PlannedSession,
+    TrainingPlan,
     TrainingPreferencesInput,
     WorkoutSession,
 )
@@ -154,6 +155,11 @@ class SessionDraft:
     intensity_band: IntensityBand
 
 
+def sessions_per_week(prefs: TrainingPreferencesInput) -> int:
+    """How many sessions a full week of the plan has: the days the athlete wants, or every free day if there are fewer."""
+    return min(prefs.days_per_week, sum(1 for day in WEEKDAYS if day not in prefs.rest_days))
+
+
 def build_sessions(
     prefs: TrainingPreferencesInput,
     start: date,
@@ -171,7 +177,7 @@ def build_sessions(
     more often (see `activity_rotation`), never when sessions fall or how hard they are.
     """
     available = [i for i, day in enumerate(WEEKDAYS) if day not in prefs.rest_days]
-    per_week = min(prefs.days_per_week, len(available))
+    per_week = sessions_per_week(prefs)
     if per_week == 0:
         return []
     rotation = activity_rotation(prefs.activity_types, goal, rules)
@@ -207,9 +213,7 @@ def build_sessions(
                     date=day,
                     activity_type=rotation[(order + week) % len(rotation)],
                     target_volume=round_half_up(week_volume * rules.band_weight[band] / weight_total),
-                    target_duration_min=_round_duration(
-                        prefs.session_duration_min * rules.band_duration_factor[band], rules
-                    ),
+                    target_duration_min=default_duration_min(prefs.session_duration_min, band, rules),
                     intensity_band=band,
                 )
             )
@@ -218,6 +222,11 @@ def build_sessions(
 
 def _round_duration(minutes: float, rules: TrainingRules) -> int:
     return max(rules.session_duration_min, round_half_up(minutes / 5) * 5)
+
+
+def default_duration_min(preferred_min: int, band: IntensityBand, rules: TrainingRules = RULES) -> int:
+    """How long a session at this intensity is when nobody picks a length: the preferred length scaled by the band."""
+    return _round_duration(preferred_min * rules.band_duration_factor[band], rules)
 
 
 def rescale_for_band(
@@ -231,3 +240,92 @@ def rescale_for_band(
         rules,
     )
     return volume, duration
+
+
+# ----------------------------------------------------------------------------- planning a week by hand
+
+
+def is_deload_week(plan: TrainingPlan, week_monday: date, rules: TrainingRules = RULES) -> bool:
+    """Whether the plan's week starting `week_monday` is one of its deload weeks (every session in it is a deload)."""
+    index = (week_monday - plan.start_date).days // 7
+    return 0 <= index < plan.weeks and (index + 1) % rules.deload_every_n_weeks == 0
+
+
+def plan_week_target(plan: TrainingPlan, week_monday: date, rules: TrainingRules = RULES) -> Optional[int]:
+    """
+    The load (pts) the plan itself set for the Monday-to-Sunday week starting `week_monday`, worked out from the plan's
+    baseline the way `generate_plan` and an adaptation worked it out: an adaptation restarts the progression from its own
+    week, so the weeks it replaced are counted from there. None for a week the plan doesn't cover, or one that an
+    adaptation has already left behind.
+    """
+    index = (week_monday - plan.start_date).days // 7
+    if not 0 <= index < plan.weeks:
+        return None
+    elapsed = 0
+    if plan.last_adaptation is not None:
+        elapsed = max(0, (week_start(plan.last_adaptation.adapted_on) - plan.start_date).days // 7)
+    if index < elapsed:
+        return None
+    return weekly_targets(plan.baseline_volume, plan.weeks - elapsed, elapsed, rules)[index - elapsed].volume
+
+
+def weight_of(band: IntensityBand, duration_min: int, rules: TrainingRules = RULES) -> float:
+    """What a session counts for when a week's load is shared out: intensity times length, which is what a point is."""
+    return rules.band_weight[band] * duration_min
+
+
+def week_pool(target: int, finished: int, now: int, sessions_after: int, per_week: int) -> int:
+    """
+    The points a week's sessions still to do share once there are `sessions_after` of them. The week carries the plan's
+    load (`target`) when it has the usual number of sessions (`per_week`) and a proportional share with fewer, as the
+    generator builds a week that is already partly gone. So a session added to a thin week brings its usual share,
+    never past what the week's finished sessions (`finished`) left of the plan's load, and one added beyond the usual
+    number only shares what is there. A week that already holds more than that (`now` points) is never cut down.
+    """
+    usual = round_half_up(target * sessions_after / per_week) if per_week > 0 else target
+    return max(now, min(target - finished, usual))
+
+
+@dataclass(frozen=True)
+class WeekShare:
+    new_volume: int
+    others: Dict[str, int]
+
+
+def share_week(pool: int, others: Sequence[Tuple[str, int, float]], new_weight: float) -> WeekShare:
+    """
+    A session joins a week that has `pool` points left to do, or one already in it changes weight. It takes its share
+    by weight, and the others keep their proportions to one another and split what is left, so the week still adds up
+    to `pool`. `others` is (id, current points, weight) for the sessions already there. Every session keeps at least
+    one point, so `pool` has to be at least the number of sessions.
+    """
+    total_weight = sum(weight for _, _, weight in others) + new_weight
+    new_volume = round_half_up(pool * new_weight / total_weight)
+    current = [points for _, points, _ in others]
+    basis = current if sum(current) > 0 else [weight for _, _, weight in others]
+    volumes = [new_volume, *_split(max(pool - new_volume, 0), basis)]
+    _keep_at_least_one(volumes)
+    return WeekShare(volumes[0], {session_id: volumes[i + 1] for i, (session_id, _, _) in enumerate(others)})
+
+
+def _split(total: int, basis: Sequence[float]) -> List[int]:
+    """`total` in whole points in proportion to `basis`, adding up exactly: the biggest remainders get the spare points."""
+    if not basis:
+        return []
+    exact = [total * part / sum(basis) for part in basis]
+    parts = [math.floor(value) for value in exact]
+    by_remainder = sorted(range(len(parts)), key=lambda i: (-(exact[i] - parts[i]), i))
+    for i in by_remainder[: total - sum(parts)]:
+        parts[i] += 1
+    return parts
+
+
+def _keep_at_least_one(volumes: List[int]) -> None:
+    """Hand points from the biggest share to any that rounded down to nothing. Only a very small week needs it."""
+    for i in range(len(volumes)):
+        while volumes[i] < 1:
+            donor = max(range(len(volumes)), key=lambda j: volumes[j])
+            if volumes[donor] <= 1:
+                return
+            volumes[donor] -= 1
+            volumes[i] += 1

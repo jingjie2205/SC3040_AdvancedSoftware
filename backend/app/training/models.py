@@ -244,6 +244,12 @@ class RemoveResult(ApiModel):
     redistributed_count: int
 
 
+class AddSessionResult(ApiModel):
+    session: PlannedSession
+    # How many of the week's other sessions had their points changed to make room for it.
+    adjusted_count: int
+
+
 class LogResult(ApiModel):
     workout: WorkoutSession
     session: Optional[PlannedSession] = None
@@ -262,8 +268,39 @@ class GeneratePlanRequest(ApiModel):
     confirm_replace: bool = False
 
 
-class RescheduleRequest(ApiModel):
+class AddSessionRequest(ApiModel):
+    """A session the athlete plans by hand. Leave the length out and it follows their preferred length for that intensity."""
+
     date: date
+    activity_type: ActivityType
+    intensity_band: IntensityBand
+    target_duration_min: Optional[int] = Field(
+        default=None, ge=RULES.session_duration_min, le=RULES.session_duration_max
+    )
+
+
+_Day = date  # `date: Optional[date] = None` would read its own default as the type inside the class body
+
+
+class SessionUpdateRequest(ApiModel):
+    """Either a new day (a move) or new details for the session where it stands, never both in one request."""
+
+    date: Optional[_Day] = None
+    activity_type: Optional[ActivityType] = None
+    intensity_band: Optional[IntensityBand] = None
+    target_duration_min: Optional[int] = Field(
+        default=None, ge=RULES.session_duration_min, le=RULES.session_duration_max
+    )
+
+    @model_validator(mode="after")
+    def _a_move_or_a_change(self) -> "SessionUpdateRequest":
+        details = (self.activity_type, self.intensity_band, self.target_duration_min)
+        changes_details = any(value is not None for value in details)
+        if self.date is not None and changes_details:
+            raise ValueError("Move the session or change its details, not both at once")
+        if self.date is None and not changes_details:
+            raise ValueError("Say what to change")
+        return self
 
 
 class SessionResponseRequest(ApiModel):

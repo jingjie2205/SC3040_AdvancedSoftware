@@ -335,6 +335,193 @@ def test_users_cannot_touch_each_others_sessions_over_http(client, repo):
     assert sessions_of(client, TODAY, TODAY, USER_B) == []
 
 
+# ------------------------------------------------------------------ planning by hand
+
+
+ADD = "/api/v1/training/plan/sessions"
+THURSDAY = "2026-10-08"  # a free day in the second week of the standard plan
+
+
+def add_body(**over) -> dict:
+    return {"date": THURSDAY, "activityType": "run", "intensityBand": "light", **over}
+
+
+def test_adding_a_session_over_http_returns_it_and_how_many_others_made_room(client, repo):
+    onboard(client, repo)
+    generate(client)
+    before = sum(s["targetVolume"] for s in sessions_of(client, date(2026, 10, 5), date(2026, 10, 11)))
+
+    response = client.post(ADD, json=add_body(), headers=headers())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"session", "adjustedCount"} and body["adjustedCount"] == 4
+    assert set(body["session"]) == {
+        "id", "planId", "date", "activityType", "targetVolume", "targetDurationMin", "intensityBand", "status"
+    }
+    assert (body["session"]["date"], body["session"]["status"], body["session"]["targetDurationMin"]) == (THURSDAY, "planned", 35)
+    week = sessions_of(client, date(2026, 10, 5), date(2026, 10, 11))
+    assert body["session"]["id"] in {s["id"] for s in week}
+    assert sum(s["targetVolume"] for s in week) == before  # the week's load is the plan's
+
+
+def test_a_chosen_length_is_used_and_checked(client, repo):
+    onboard(client, repo)
+    generate(client)
+    ok = client.post(ADD, json=add_body(targetDurationMin=60), headers=headers())
+    assert ok.status_code == 200 and ok.json()["session"]["targetDurationMin"] == 60
+    for bad in (5, 14, 181, 500, 40.5, "long"):
+        refused = client.post(ADD, json=add_body(date="2026-10-06", targetDurationMin=bad), headers=headers())
+        assert refused.status_code == 422, bad
+        assert "targetDurationMin" in refused.json()["detail"]["fieldErrors"], bad
+
+
+def test_a_malformed_add_is_reported_field_by_field_in_the_usual_shape(client, repo):
+    onboard(client, repo)
+    generate(client)
+    refused = client.post(ADD, json={"activityType": "swim", "intensityBand": "extreme"}, headers=headers())
+    detail = refused.json()["detail"]
+    assert refused.status_code == 422 and detail["code"] == "VALIDATION"
+    assert {"date", "activityType", "intensityBand"} <= set(detail["fieldErrors"])
+
+
+def test_adding_on_a_day_the_rules_forbid_is_a_409_with_the_nearest_day_that_works(client, repo):
+    onboard(client, repo)
+    generate(client)
+    taken = client.post(ADD, json=add_body(date="2026-10-07"), headers=headers())  # Wednesday already has a session
+    detail = taken.json()["detail"]
+    assert taken.status_code == 409 and detail["code"] == "DAY_OCCUPIED"
+    assert client.post(ADD, json=add_body(date=detail["suggestedDate"]), headers=headers()).status_code == 200
+
+    beside_a_push = client.post(ADD, json=add_body(date="2026-10-11", intensityBand="push"), headers=headers())
+    assert beside_a_push.status_code == 409 and beside_a_push.json()["detail"]["code"] == "CONSECUTIVE_HIGH_INTENSITY"
+    assert beside_a_push.json()["detail"]["suggestedDate"]
+
+    past = client.post(ADD, json=add_body(date="2026-09-29"), headers=headers())
+    assert past.status_code == 409 and past.json()["detail"]["code"] == "IN_PAST"
+
+
+def test_a_band_or_activity_the_week_or_athlete_doesnt_allow_is_a_422_against_that_field(client, repo):
+    onboard(client, repo)
+    generate(client)
+    deload_week_push = client.post(ADD, json=add_body(date="2026-10-20", intensityBand="push"), headers=headers())
+    assert deload_week_push.status_code == 422
+    assert "deload week" in deload_week_push.json()["detail"]["fieldErrors"]["intensityBand"]
+    other_activity = client.post(ADD, json=add_body(activityType="bodyweight"), headers=headers())
+    assert other_activity.status_code == 422 and "activityType" in other_activity.json()["detail"]["fieldErrors"]
+
+
+def test_a_week_with_no_load_left_is_a_409_week_full(client, repo):
+    onboard(client, repo)
+    generate(client)
+    for session in sessions_of(client, date(2026, 10, 5), date(2026, 10, 11)):
+        owner, stored = repo.sessions[session["id"]]
+        repo.sessions[session["id"]] = (owner, stored.model_copy(update={"status": "completed"}))
+    refused = client.post(ADD, json=add_body(), headers=headers())
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "WEEK_FULL"
+
+
+def test_adding_without_a_plan_is_a_404_no_plan(client):
+    client.put("/api/v1/training/preferences", json=PREFS, headers=headers())
+    refused = client.post(ADD, json=add_body(), headers=headers())
+    assert refused.status_code == 404 and refused.json()["detail"]["code"] == "NO_PLAN"
+
+
+def test_adding_needs_a_token_and_writes_nothing_without_one(client, repo):
+    onboard(client, repo)
+    generate(client)
+    before = len(repo.sessions)
+    for headers_ in ({}, {"Authorization": "Bearer forged-or-expired"}):
+        assert client.post(ADD, json=add_body(), headers=headers_).status_code in (401, 403)
+    assert len(repo.sessions) == before
+
+
+def test_one_users_new_session_goes_into_their_own_plan_and_the_token_is_the_only_identity(client, repo):
+    onboard(client, repo, USER_A)
+    generate(client)
+    onboard(client, repo, USER_B)
+    generate(client, user=USER_B)
+    theirs = sessions_of(client, date(2026, 10, 5), date(2026, 10, 11), USER_B)
+
+    added = client.post(ADD + "?userId=" + USER_B, json={**add_body(), "userId": USER_B}, headers=headers(USER_A))
+
+    assert added.status_code == 200
+    assert repo.sessions[added.json()["session"]["id"]][0] == USER_A
+    assert sessions_of(client, date(2026, 10, 5), date(2026, 10, 11), USER_B) == theirs
+
+
+def test_a_session_can_be_changed_in_place_over_http(client, repo):
+    onboard(client, repo)
+    generate(client)
+    wednesday = sessions_of(client, date(2026, 10, 7), date(2026, 10, 7))[0]
+    url = f"/api/v1/training/sessions/{wednesday['id']}"
+
+    renamed = client.patch(url, json={"activityType": "run"}, headers=headers())
+    assert renamed.status_code == 200
+    assert renamed.json()["activityType"] == "run" and renamed.json()["targetVolume"] == wednesday["targetVolume"]
+
+    harder = client.patch(url, json={"intensityBand": "push", "targetDurationMin": 50}, headers=headers())
+    assert harder.status_code == 200
+    assert (harder.json()["intensityBand"], harder.json()["targetDurationMin"]) == ("push", 50)
+    assert harder.json()["targetVolume"] > wednesday["targetVolume"]
+    week = sessions_of(client, date(2026, 10, 5), date(2026, 10, 11))
+    assert sum(s["targetVolume"] for s in week) == 104
+
+
+def test_changing_a_session_is_refused_in_the_usual_shape(client, repo):
+    onboard(client, repo)
+    generate(client)
+    friday = sessions_of(client, date(2026, 10, 9), date(2026, 10, 9))[0]
+    url = f"/api/v1/training/sessions/{friday['id']}"
+
+    beside_a_push = client.patch(url, json={"intensityBand": "push"}, headers=headers())  # Saturday is a push
+    assert beside_a_push.status_code == 409 and beside_a_push.json()["detail"]["code"] == "CONSECUTIVE_HIGH_INTENSITY"
+
+    unchanged = client.patch(url, json={"activityType": friday["activityType"]}, headers=headers())
+    assert unchanged.status_code == 409 and unchanged.json()["detail"]["code"] == "NO_CHANGE"
+
+    deload = client.patch(url, json={"intensityBand": "deload"}, headers=headers())
+    assert deload.status_code == 422 and "intensityBand" in deload.json()["detail"]["fieldErrors"]
+
+    swim = client.patch(url, json={"activityType": "swim"}, headers=headers())
+    assert swim.status_code == 422 and "activityType" in swim.json()["detail"]["fieldErrors"]
+
+    too_short = client.patch(url, json={"targetDurationMin": 3}, headers=headers())
+    assert too_short.status_code == 422 and "targetDurationMin" in too_short.json()["detail"]["fieldErrors"]
+
+
+def test_a_patch_is_a_move_or_a_change_never_both_and_never_nothing(client, repo):
+    onboard(client, repo)
+    generate(client)
+    friday = sessions_of(client, date(2026, 10, 9), date(2026, 10, 9))[0]
+    url = f"/api/v1/training/sessions/{friday['id']}"
+
+    both = client.patch(url, json={"date": THURSDAY, "activityType": "gym"}, headers=headers())
+    assert both.status_code == 422 and "not both at once" in both.json()["detail"]["fieldErrors"]["form"]
+    nothing = client.patch(url, json={}, headers=headers())
+    assert nothing.status_code == 422 and "Say what to change" in nothing.json()["detail"]["fieldErrors"]["form"]
+    assert sessions_of(client, date(2026, 10, 9), date(2026, 10, 9))[0] == friday
+
+    moved = client.patch(url, json={"date": THURSDAY}, headers=headers())
+    assert moved.status_code == 200 and moved.json()["status"] == "moved"
+
+
+def test_nobody_else_can_change_a_session(client, repo):
+    onboard(client, repo)
+    generate(client)
+    theirs = sessions_of(client, date(2026, 10, 7), date(2026, 10, 7))[0]
+    refused = client.patch(f"/api/v1/training/sessions/{theirs['id']}", json={"activityType": "run"}, headers=headers(USER_B))
+    assert refused.status_code == 404 and refused.json()["detail"]["code"] == "NOT_FOUND"
+    assert sessions_of(client, date(2026, 10, 7), date(2026, 10, 7))[0] == theirs
+
+
+def test_the_new_route_carries_no_readiness(app):
+    """Hard Rule 4 again, at the schema: planning a session can't be a way to read a score."""
+    schema = app.openapi()
+    reply = str(schema["paths"][ADD]["post"]["responses"]).lower()
+    assert "readiness" not in reply and "score" not in reply
+
+
 # ------------------------------------------------------------------ today and readiness
 
 
@@ -609,8 +796,11 @@ def test_readiness_appears_in_exactly_three_operations():
 TYPES_FILE = Path(__file__).resolve().parents[3] / "frontend" / "lib" / "training" / "types.ts"
 
 
-def _interface_fields(name: str) -> set:
-    source = TYPES_FILE.read_text(encoding="utf-8")
+API_FILE = TYPES_FILE.with_name("api.ts")
+
+
+def _interface_fields(name: str, file: Path = TYPES_FILE) -> set:
+    source = file.read_text(encoding="utf-8")
     body = re.search(rf"export interface {name} \{{(.*?)\n\}}", source, re.S).group(1)
     return set(re.findall(r"^\s+(\w+)\??:", body, re.M))
 
@@ -624,6 +814,7 @@ def test_responses_contain_every_field_the_frontend_types_declare(client, repo):
     client.post(f"/api/v1/training/sessions/{saturday['id']}/log", headers=headers(),
                 json={"date": TODAY.isoformat(), "activityType": "run", "actualDurationMin": 30, "actualVolume": 25, "rpe": 5, "avgHr": 140})
     client.post("/api/v1/training/plan/recalculate", headers=headers())
+    added = client.post(ADD, json=add_body(date="2026-10-01"), headers=headers()).json()
 
     plan = client.get("/api/v1/training/plan", headers=headers()).json()
     today = client.get("/api/v1/training/today", headers=headers()).json()
@@ -651,6 +842,8 @@ def test_responses_contain_every_field_the_frontend_types_declare(client, repo):
     for name, payload in checks.items():
         missing = _interface_fields(name) - set(payload)
         assert not missing, f"{name} is missing {sorted(missing)}"
+    assert _interface_fields("AddSessionResult", API_FILE) <= set(added), "AddSessionResult"
+    assert _interface_fields("PlannedSession") <= set(added["session"])
 
 
 # ------------------------------------------------------------------ readiness model

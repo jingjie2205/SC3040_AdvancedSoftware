@@ -23,8 +23,12 @@ from .coach import (
 from .config import COACH_RULES, PLAN_NOTICE, RULES, CoachRules, TrainingRules
 from .errors import TrainingError
 from .models import (
+    ActivityType,
+    AddSessionRequest,
+    AddSessionResult,
     CoachMessage,
     GeneratePlanRequest,
+    IntensityBand,
     LogResult,
     LogWorkoutInput,
     ModelInfo,
@@ -36,6 +40,7 @@ from .models import (
     Schedule,
     ScoreResult,
     SessionResponseRequest,
+    SessionUpdateRequest,
     SleepEntry,
     SleepInput,
     TodaySummary,
@@ -53,13 +58,20 @@ from .planner import (
     WeekTarget,
     baseline_from_history,
     build_sessions,
+    default_duration_min,
     first_unsafe_week,
     goal_for,
+    is_deload_week,
     modelling_workouts,
     plan_end_date,
+    plan_week_target,
     round_half_up,
+    sessions_per_week,
+    share_week,
+    week_pool,
     week_start,
     weekly_targets,
+    weight_of,
 )
 from .readiness import (
     ActivityRecord,
@@ -70,7 +82,15 @@ from .readiness import (
     fingerprint,
 )
 from .repository import ChangeSet, TrainingRepository
-from .rules import LOGGABLE_STATUSES, MOVABLE_STATUSES, MoveContext, check_move, reconcile
+from .rules import (
+    LOGGABLE_STATUSES,
+    MOVABLE_STATUSES,
+    MoveContext,
+    band_refusal,
+    check_move,
+    check_placement,
+    reconcile,
+)
 
 logger = logging.getLogger("endurance.training")
 
@@ -253,17 +273,7 @@ class TrainingService:
         if plan is None or session.plan_id != plan.id:
             raise TrainingError("NOT_MOVABLE", "Sessions from a replaced plan can't be moved.")
 
-        context = MoveContext(
-            sessions=[
-                s
-                for s in self.repo.list_sessions(user_id, plan.start_date, plan.end_date)
-                if s.plan_id == plan.id
-            ],
-            plan_start=plan.start_date,
-            plan_end=plan.end_date,
-            today=today,
-        )
-        refusal = check_move(session, target, context, self.rules)
+        refusal = check_move(session, target, self._placement_context(user_id, today, plan), self.rules)
         if refusal:
             raise TrainingError(refusal.code, refusal.reason, suggested_date=refusal.suggested_date)
 
@@ -290,6 +300,112 @@ class TrainingService:
             user_id, ChangeSet(delete_session_ids=[session.id], upsert_sessions=updated)
         )
         return RemoveResult(redistributed_count=len(rest))
+
+    # ------------------------------------------------------------------ planning by hand
+
+    def add_session(self, user_id: str, today: date, data: AddSessionRequest) -> AddSessionResult:
+        """
+        Plan a session on a free day of the active plan. The plan, not the athlete, decides how much training a week
+        carries (see `planner.week_pool`): the new session takes its share of that, by intensity and length, and the
+        week's other sessions give a little to make room, the same promise removing one makes the other way round.
+        """
+        plan = self._require_plan(user_id, today, "Generate a training plan first, then you can plan sessions in it.")
+        preferences = self._require_preferences(user_id, "Set your training preferences before planning sessions.")
+        monday = week_start(data.date)
+        self._require_details_allowed(plan, preferences, monday, data.activity_type, data.intensity_band)
+
+        duration = (
+            data.target_duration_min
+            if data.target_duration_min is not None
+            else default_duration_min(preferences.session_duration_min, data.intensity_band, self.rules)
+        )
+        context = self._placement_context(user_id, today, plan)
+        draft = PlannedSession(
+            id=_new_id(),
+            plan_id=plan.id,
+            date=data.date,
+            activity_type=data.activity_type,
+            target_volume=0,
+            target_duration_min=duration,
+            intensity_band=data.intensity_band,
+            status="planned",
+        )
+        refusal = check_placement(draft, data.date, context, self.rules)
+        if refusal:
+            raise TrainingError(refusal.code, refusal.reason, suggested_date=refusal.suggested_date)
+
+        week = self._plan_week(context, plan, monday)
+        movable = [s for s in week if s.status in MOVABLE_STATUSES]
+        pool = week_pool(
+            target=plan_week_target(plan, monday, self.rules) or 0,
+            finished=sum(s.target_volume for s in week if s.status not in MOVABLE_STATUSES),  # done or missed
+            now=sum(s.target_volume for s in movable),
+            sessions_after=len(movable) + 1,
+            per_week=sessions_per_week(preferences),
+        )
+        if pool < len(movable) + 1:
+            raise TrainingError(
+                "WEEK_FULL",
+                "That week's training load is already planned or done, so there's nothing left to share with "
+                "another session. Pick another week, or log it as an extra workout once you've done it.",
+            )
+
+        share = share_week(pool, self._weights(movable), weight_of(data.intensity_band, duration, self.rules))
+        added = draft.model_copy(update={"target_volume": share.new_volume})
+        adjusted = self._with_volumes(movable, share.others)
+        self.repo.apply(user_id, ChangeSet(upsert_sessions=[added, *adjusted]))
+        return AddSessionResult(session=added, adjusted_count=len(adjusted))
+
+    def update_session(
+        self, user_id: str, today: date, session_id: str, patch: SessionUpdateRequest
+    ) -> PlannedSession:
+        """Move a session to another day, or change its activity, intensity or length where it stands."""
+        if patch.date is not None:
+            return self.reschedule_session(user_id, today, session_id, patch.date)
+
+        plan = self._sync(user_id, today)
+        session = self._require_session(user_id, session_id)
+        if plan is None or session.plan_id != plan.id:
+            raise TrainingError("NOT_MOVABLE", "Sessions from a replaced plan can't be changed.")
+        if session.status not in MOVABLE_STATUSES:
+            raise TrainingError("NOT_MOVABLE", "Completed, partial and missed sessions can't be changed.")
+
+        asked = {
+            "activity_type": patch.activity_type,
+            "intensity_band": patch.intensity_band,
+            "target_duration_min": patch.target_duration_min,
+        }
+        changes = {name: value for name, value in asked.items() if value is not None and value != getattr(session, name)}
+        if not changes:
+            raise TrainingError("NO_CHANGE", "That session already looks like that.")
+
+        preferences = self._require_preferences(user_id, "Set your training preferences before changing a session.")
+        monday = week_start(session.date)
+        self._require_details_allowed(
+            plan, preferences, monday, changes.get("activity_type"), changes.get("intensity_band")
+        )
+        updated = session.model_copy(update=changes)
+        context = self._placement_context(user_id, today, plan)
+        if "intensity_band" in changes:
+            # Only the intensity can break a day rule where the session already stands: a push beside a push.
+            refusal = check_placement(updated, updated.date, context, self.rules)
+            if refusal:
+                raise TrainingError(refusal.code, refusal.reason)
+
+        adjusted: List[PlannedSession] = []
+        if "intensity_band" in changes or "target_duration_min" in changes:
+            # A different weight changes this session's share of the week; the week's total stays what it was.
+            movable = [s for s in self._plan_week(context, plan, monday) if s.status in MOVABLE_STATUSES]
+            others = [s for s in movable if s.id != session.id]
+            share = share_week(
+                sum(s.target_volume for s in movable),
+                self._weights(others),
+                weight_of(updated.intensity_band, updated.target_duration_min, self.rules),
+            )
+            updated = updated.model_copy(update={"target_volume": share.new_volume})
+            adjusted = self._with_volumes(others, share.others)
+        self.repo.apply(user_id, ChangeSet(upsert_sessions=[updated, *adjusted]))
+        return updated
 
     # ------------------------------------------------------------------ today (T-3, T-4)
 
@@ -529,6 +645,70 @@ class TrainingService:
         if session is None:
             raise TrainingError("NOT_FOUND", "That session no longer exists.")
         return session
+
+    def _require_plan(self, user_id: str, today: date, message: str) -> TrainingPlan:
+        plan = self._sync(user_id, today)
+        if plan is None:
+            raise TrainingError("NO_PLAN", message)
+        return plan
+
+    def _require_preferences(self, user_id: str, message: str) -> TrainingPreferences:
+        preferences = self.repo.get_preferences(user_id)
+        if preferences is None:
+            raise TrainingError("NO_PREFERENCES", message)
+        return preferences
+
+    def _require_details_allowed(
+        self,
+        plan: TrainingPlan,
+        preferences: TrainingPreferences,
+        week_monday: date,
+        activity_type: Optional[ActivityType],
+        band: Optional[IntensityBand],
+    ) -> None:
+        """A hand-planned session uses one of the athlete's own activities and an intensity its week allows."""
+        problems: Dict[str, str] = {}
+        if activity_type is not None and activity_type not in preferences.activity_types:
+            problems["activityType"] = "Pick one of your preferred activity types"
+        if band is not None:
+            why_not = band_refusal(band, is_deload_week(plan, week_monday, self.rules))
+            if why_not:
+                problems["intensityBand"] = why_not
+        if problems:
+            raise TrainingError("VALIDATION", "Check the highlighted fields.", field_errors=problems)
+
+    def _placement_context(self, user_id: str, today: date, plan: TrainingPlan) -> MoveContext:
+        """
+        Every session the athlete has in the plan's days and one day either side, whichever plan it belongs to. The
+        database allows one planned session a day per user, so a finished session from a replaced plan still takes its
+        day, and a push the day before the plan starts still counts as a neighbour.
+        """
+        return MoveContext(
+            sessions=self.repo.list_sessions(
+                user_id, plan.start_date - timedelta(days=1), plan.end_date + timedelta(days=1)
+            ),
+            plan_start=plan.start_date,
+            plan_end=plan.end_date,
+            today=today,
+        )
+
+    @staticmethod
+    def _plan_week(context: MoveContext, plan: TrainingPlan, monday: date) -> List[PlannedSession]:
+        """The plan's own sessions in the Monday-to-Sunday week starting `monday`."""
+        sunday = monday + timedelta(days=6)
+        return [s for s in context.sessions if s.plan_id == plan.id and monday <= s.date <= sunday]
+
+    def _weights(self, sessions: Sequence[PlannedSession]) -> List[Tuple[str, int, float]]:
+        return [
+            (s.id, s.target_volume, weight_of(s.intensity_band, s.target_duration_min, self.rules)) for s in sessions
+        ]
+
+    @staticmethod
+    def _with_volumes(sessions: Sequence[PlannedSession], volumes: Dict[str, int]) -> List[PlannedSession]:
+        """The sessions whose points are different in `volumes`, with the new points. The rest are left out."""
+        return [
+            s.model_copy(update={"target_volume": volumes[s.id]}) for s in sessions if volumes[s.id] != s.target_volume
+        ]
 
     def _require_safe(self, targets: Sequence[WeekTarget]) -> None:
         unsafe = first_unsafe_week(targets, self.rules)

@@ -1,16 +1,25 @@
-from datetime import date, timedelta
+import random
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from app.training.config import RULES, TrainingRules
-from app.training.models import PlannedSession, TrainingPreferencesInput
+from app.training.config import PLAN_NOTICE, RULES, TrainingRules
+from app.training.models import PlanAdaptation, PlannedSession, TrainingPlan, TrainingPreferencesInput
 from app.training.planner import (
     baseline_from_history,
     build_sessions,
+    default_duration_min,
     first_unsafe_week,
+    is_deload_week,
+    plan_end_date,
+    plan_week_target,
     rescale_for_band,
+    sessions_per_week,
+    share_week,
+    week_pool,
     week_start,
     weekly_targets,
+    weight_of,
 )
 from training_fakes import STANDARD_PREFS, TODAY, workout
 
@@ -198,3 +207,182 @@ def test_rescale_for_band_scales_volume_and_duration_down_consistently():
 def test_week_start_is_monday():
     assert week_start(date(2026, 10, 4)) == MONDAY  # Sunday
     assert week_start(MONDAY) == MONDAY
+
+
+# ------------------------------------------------------------------ planning a week by hand
+
+
+def _plan_of(weeks: int = 8, baseline: float = 100.0, adapted_on: date = None) -> TrainingPlan:
+    adaptation = None
+    if adapted_on is not None:
+        adaptation = PlanAdaptation(trigger="manual", reason="", adapted_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                                    adapted_on=adapted_on)
+    return TrainingPlan(id="p", start_date=MONDAY, end_date=plan_end_date(MONDAY, weeks), weeks=weeks, status="active",
+                        baseline_volume=baseline, created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                        notice=PLAN_NOTICE, last_adaptation=adaptation)
+
+
+def _week_totals(drafts, first_monday: date, weeks: int):
+    """(Monday, points built, bands built) for each of `weeks` weeks of generated sessions."""
+    rows = []
+    for w in range(weeks):
+        monday = first_monday + timedelta(days=7 * w)
+        week = [d for d in drafts if monday <= d.date < monday + timedelta(days=7)]
+        rows.append((monday, sum(d.target_volume for d in week), {d.intensity_band for d in week}))
+    return rows
+
+
+def test_the_plans_weekly_target_is_what_the_generator_built_each_week():
+    plan = _plan_of(weeks=8, baseline=100)
+    drafts = build_sessions(STANDARD_PREFS, MONDAY, weekly_targets(100, 8), MONDAY)
+    for monday, built, _ in _week_totals(drafts, MONDAY, 8):
+        assert abs(plan_week_target(plan, monday) - built) <= 2, monday
+
+
+def test_after_an_adaptation_the_weeks_it_rebuilt_follow_its_baseline_and_rhythm():
+    third_week = MONDAY + timedelta(days=14)
+    adapted = _plan_of(weeks=8, baseline=120, adapted_on=third_week + timedelta(days=2))  # adapted on a Wednesday
+    rebuilt = build_sessions(STANDARD_PREFS, third_week, weekly_targets(120, 6, week_offset=2), third_week)
+    for monday, built, _ in _week_totals(rebuilt, third_week, 6):
+        assert abs(plan_week_target(adapted, monday) - built) <= 2, monday
+    assert plan_week_target(adapted, MONDAY) is None  # the weeks before it are history, not something it set
+    assert plan_week_target(adapted, MONDAY + timedelta(days=7)) is None
+
+
+def test_a_week_outside_the_plan_has_no_target():
+    plan = _plan_of(weeks=4)
+    assert plan_week_target(plan, MONDAY - timedelta(days=7)) is None
+    assert plan_week_target(plan, MONDAY + timedelta(days=28)) is None
+    assert plan_week_target(plan, MONDAY + timedelta(days=21)) is not None
+
+
+def test_deload_weeks_are_found_by_their_place_in_the_plan_whether_or_not_it_was_adapted():
+    fresh = _plan_of(weeks=8)
+    built = build_sessions(STANDARD_PREFS, MONDAY, weekly_targets(100, 8), MONDAY)
+    for monday, _, bands in _week_totals(built, MONDAY, 8):
+        assert is_deload_week(fresh, monday) == (bands == {"deload"}), monday
+
+    third_week = MONDAY + timedelta(days=14)
+    adapted = _plan_of(weeks=8, adapted_on=third_week)
+    rebuilt = build_sessions(STANDARD_PREFS, third_week, weekly_targets(100, 6, week_offset=2), third_week)
+    for monday, _, bands in _week_totals(rebuilt, third_week, 6):
+        assert is_deload_week(adapted, monday) == (bands == {"deload"}), monday
+
+
+def test_nothing_outside_the_plan_is_a_deload_week():
+    plan = _plan_of(weeks=4)
+    assert not is_deload_week(plan, MONDAY - timedelta(days=7))
+    assert not is_deload_week(plan, MONDAY + timedelta(days=28 + 21))
+    assert is_deload_week(plan, MONDAY + timedelta(days=21))
+
+
+@pytest.mark.parametrize("band,minutes", [("push", 45), ("light", 35), ("deload", 25)])
+def test_a_sessions_default_length_is_the_preferred_length_scaled_by_its_intensity(band, minutes):
+    assert default_duration_min(45, band) == minutes
+    made = [d for d in _plan() if d.intensity_band == band]
+    assert made and {d.target_duration_min for d in made} == {minutes}  # exactly what the generator gives it
+
+
+def test_a_default_length_never_drops_below_the_shortest_session():
+    assert default_duration_min(RULES.session_duration_min, "deload") == RULES.session_duration_min
+
+
+def test_a_sessions_weight_is_its_intensity_times_its_length():
+    assert weight_of("push", 45) == 45
+    assert weight_of("light", 40) == pytest.approx(28)
+    assert weight_of("deload", 30) == pytest.approx(18)
+
+
+def test_a_session_joining_a_week_takes_its_share_by_weight_and_the_week_still_adds_up():
+    share = share_week(100, [("a", 50, 40.0), ("b", 50, 40.0)], new_weight=40.0)
+    assert share.new_volume == 33
+    assert sorted(share.others.values()) == [33, 34]
+    assert share.new_volume + sum(share.others.values()) == 100
+
+
+def test_the_others_keep_their_proportions_to_one_another():
+    share = share_week(90, [("big", 60, 30.0), ("small", 30, 30.0)], new_weight=30.0)
+    assert share.new_volume == 30
+    assert share.others == {"big": 40, "small": 20}
+
+
+def test_a_session_alone_in_a_week_carries_all_of_it():
+    assert share_week(104, [], new_weight=31.5) == share_week(104, [], new_weight=500.0)
+    assert share_week(104, [], new_weight=31.5).new_volume == 104
+
+
+def test_a_longer_or_harder_session_takes_a_bigger_share():
+    others = [("a", 40, 30.0), ("b", 40, 30.0)]
+    small = share_week(100, others, new_weight=weight_of("light", 20)).new_volume
+    large = share_week(100, others, new_weight=weight_of("push", 60)).new_volume
+    assert small < large
+
+
+def test_sharing_a_week_always_adds_up_exactly_and_never_leaves_a_session_without_a_point():
+    rng = random.Random(3040)
+    for _ in range(400):
+        others = [(f"s{i}", rng.randint(1, 80), rng.uniform(9, 180)) for i in range(rng.randint(0, 6))]
+        pool = rng.randint(len(others) + 1, 300)
+        share = share_week(pool, others, new_weight=rng.uniform(9, 180))
+        volumes = [share.new_volume, *share.others.values()]
+        assert sum(volumes) == pool, (pool, others)
+        assert min(volumes) >= 1, (pool, others)
+        assert set(share.others) == {sid for sid, _, _ in others}
+
+
+def test_a_very_small_week_still_gives_everyone_a_point():
+    share = share_week(4, [("a", 1, 9.0), ("b", 1, 9.0), ("c", 1, 9.0)], new_weight=180.0)
+    assert share.new_volume + sum(share.others.values()) == 4
+    assert min([share.new_volume, *share.others.values()]) == 1
+
+
+def test_sharing_is_deterministic():
+    others = [("a", 31, 45.0), ("b", 21, 24.5), ("c", 21, 24.5), ("d", 31, 45.0)]
+    assert share_week(104, others, 24.5) == share_week(104, others, 24.5)
+
+
+def test_a_full_week_has_the_days_the_athlete_wants_or_every_free_day_if_fewer():
+    assert sessions_per_week(STANDARD_PREFS) == 4
+    every_day = TrainingPreferencesInput(days_per_week=7, session_duration_min=45, activity_types=["run"], rest_days=[])
+    assert sessions_per_week(every_day) == 7
+    few_free = TrainingPreferencesInput.model_construct(
+        days_per_week=5, session_duration_min=45, activity_types=["run"], rest_days=["mon", "tue", "wed", "thu", "fri"],
+    )
+    assert sessions_per_week(few_free) == 2  # only Saturday and Sunday are free
+    assert len(_plan(few_free, weeks=1)) == sessions_per_week(few_free)  # and it is what the generator builds
+
+
+@pytest.mark.parametrize(
+    "target,finished,now,after,per_week,expected",
+    [
+        # nothing planned yet: each session brings a usual share, up to the plan's load
+        (100, 0, 0, 1, 4, 25),
+        (100, 0, 25, 2, 4, 50),
+        (100, 0, 75, 4, 4, 100),
+        # beyond the usual number the week only shares what it has
+        (100, 0, 100, 5, 4, 100),
+        # a week that already holds more than that is never cut down
+        (100, 0, 130, 5, 4, 130),
+        (100, 0, 90, 2, 4, 90),
+        # finished sessions have used up their part of the plan's load
+        (100, 40, 60, 4, 4, 60),
+        (100, 40, 0, 1, 4, 25),
+        (100, 40, 20, 3, 4, 60),  # capped at what the finished ones left
+        (100, 100, 0, 1, 4, 0),  # nothing left: the caller refuses
+        # a plan week with no target at all
+        (0, 0, 0, 1, 4, 0),
+    ],
+)
+def test_the_points_a_week_shares_follow_the_sessions_it_has(target, finished, now, after, per_week, expected):
+    assert week_pool(target, finished, now, after, per_week) == expected
+
+
+def test_a_week_pool_never_goes_below_what_the_week_already_holds_or_above_the_plans_load_unless_it_already_did():
+    rng = random.Random(7)
+    for _ in range(500):
+        target = rng.randint(40, 200)
+        finished = rng.randint(0, target)
+        now = rng.randint(0, 250)
+        pool = week_pool(target, finished, now, rng.randint(1, 9), rng.randint(1, 7))
+        assert pool >= now
+        assert pool <= max(now, target - finished)
