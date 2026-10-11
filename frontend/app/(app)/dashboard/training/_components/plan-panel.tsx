@@ -281,7 +281,8 @@ export function PlanPanel({
           <p className="mt-4 text-xs text-slate-400">
             Your plan also adapts on its own after {R.missedSessionsTrigger} missed sessions in a
             row, or {R.lowReadinessDaysTrigger} days in a row of low readiness. You&apos;ll always
-            be told when it happens and why.
+            be told when it happens and why. You can also plan sessions yourself on the Schedule tab.
+            Adapting rebuilds the weeks still to come, including those.
           </p>
         )}
       </div>
@@ -382,8 +383,8 @@ export function PlanPanel({
           onCancel={() => setConfirm(null)}
         >
           <p>
-            A new plan replaces your current one. Sessions still to come are removed. Anything you
-            already logged stays in your history.
+            A new plan replaces your current one. Sessions still to come are removed, including any you
+            added or moved yourself. Anything you already logged stays in your history.
           </p>
         </ConfirmDialog>
       )}
@@ -398,7 +399,8 @@ export function PlanPanel({
         >
           <p>
             Your plan is rebuilt from what you actually completed, not from what was planned. Only
-            the weeks still to come change, and you&apos;ll be shown what changed and why.
+            the weeks still to come change, and sessions you added, moved or edited in them are rebuilt
+            too. You&apos;ll be shown what changed and why.
           </p>
         </ConfirmDialog>
       )}

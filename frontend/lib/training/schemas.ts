@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRAINING_RULES as R } from "./config";
 import { addDays, isValidISODate, todayISO } from "./dates";
-import { ACTIVITY_TYPES, WEEKDAYS } from "./types";
+import { ACTIVITY_TYPES, INTENSITY_BANDS, WEEKDAYS } from "./types";
 
 /**
  * Shared by the forms and by the API layer, so client and server reject the same input.
@@ -61,6 +61,30 @@ export const sleepSchema = z.object({
     .min(R.sleepHours.min, `Sleep must be between ${R.sleepHours.min} and ${R.sleepHours.max} hours`)
     .max(R.sleepHours.max, `Sleep must be between ${R.sleepHours.min} and ${R.sleepHours.max} hours`),
 });
+
+const sessionLength = wholeNumber("Length", R.sessionDurationMin.min, R.sessionDurationMin.max);
+
+/** A session planned by hand. A null length means the preferred length for that intensity. */
+export const addSessionSchema = z.object({
+  date: z.string().refine(isValidISODate, "Choose a date"),
+  activityType: z.enum(ACTIVITY_TYPES),
+  intensityBand: z.enum(INTENSITY_BANDS),
+  targetDurationMin: sessionLength.nullable(),
+});
+
+export type AddSessionInput = z.infer<typeof addSessionSchema>;
+
+/** What can change on a planned session where it stands. Anything left out stays as it is. */
+export const sessionChangeSchema = z
+  .object({
+    activityType: z.enum(ACTIVITY_TYPES),
+    intensityBand: z.enum(INTENSITY_BANDS),
+    targetDurationMin: sessionLength,
+  })
+  .partial()
+  .refine((change) => Object.values(change).some((value) => value !== undefined), "Say what to change");
+
+export type SessionChange = z.infer<typeof sessionChangeSchema>;
 
 export const logWorkoutSchema = z.object({
   date: z

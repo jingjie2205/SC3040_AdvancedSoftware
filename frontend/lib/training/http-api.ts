@@ -7,6 +7,7 @@
  */
 import { todayISO } from "./dates";
 import type {
+  AddSessionResult,
   ApiError,
   ApiErrorCode,
   ApiResult,
@@ -153,6 +154,8 @@ export const httpTrainingApi: TrainingApi = {
   rescheduleSession: (id, newDate) =>
     request<PlannedSession>("PATCH", sessionPath(id), { date: newDate }),
   removeSession: (id) => request<RemoveResult>("DELETE", sessionPath(id)),
+  addSession: (input) => request<AddSessionResult>("POST", "/plan/sessions", input),
+  updateSession: (id, change) => request<PlannedSession>("PATCH", sessionPath(id), change),
 
   getToday: () => read<TodayView>("/today"),
   getSummary: () => read<TrainingSummary>("/summary"),

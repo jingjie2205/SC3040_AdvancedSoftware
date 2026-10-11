@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Lock, Plus, Trash2 } from "lucide-react";
+import { CalendarPlus, ChevronLeft, ChevronRight, Lock, Pencil, Plus, Trash2 } from "lucide-react";
 import { trainingApi } from "@/lib/training/api";
 import {
   addDays,
@@ -19,10 +19,12 @@ import type {
   PlannedSession,
   Schedule,
   TrainingPlan,
+  TrainingPreferences,
   WorkoutSession,
 } from "@/lib/training/types";
 import { LogWorkoutDialog, type LogTarget } from "./log-workout-dialog";
 import { RescheduleDialog } from "./reschedule-dialog";
+import { SessionDialog, type SessionDialogTarget } from "./session-dialog";
 import {
   ACTIVITY_LABEL,
   ActivityIcon,
@@ -34,6 +36,7 @@ import {
   Segmented,
   StatusBadge,
   btnDanger,
+  btnPrimary,
   btnSecondary,
   cardClass,
 } from "./ui";
@@ -94,11 +97,13 @@ function entryLabel(date: string, entry: DayEntry): string {
 
 export function SchedulePanel({
   plan,
+  preferences,
   refreshKey,
   onChanged,
   onNotice,
 }: {
   plan: TrainingPlan | null;
+  preferences: TrainingPreferences | null;
   refreshKey: number;
   onChanged: () => void;
   onNotice: (message: string) => void;
@@ -111,6 +116,7 @@ export function SchedulePanel({
   const [retry, setRetry] = useState(0);
   const [logTarget, setLogTarget] = useState<LogTarget | null>(null);
   const [moveTarget, setMoveTarget] = useState<PlannedSession | null>(null);
+  const [sessionTarget, setSessionTarget] = useState<SessionDialogTarget | null>(null);
   const [removeTarget, setRemoveTarget] = useState<PlannedSession | null>(null);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -196,6 +202,12 @@ export function SchedulePanel({
   }
 
   const selectedEntries = days.get(selected) ?? [];
+  // A session can be planned by hand on any free day from today to the end of the plan.
+  const canPlanHere =
+    plan !== null &&
+    selected >= (plan.startDate > today ? plan.startDate : today) &&
+    selected <= plan.endDate &&
+    !selectedEntries.some((entry) => entry.session !== null);
 
   return (
     <div className="space-y-6">
@@ -204,7 +216,9 @@ export function SchedulePanel({
           <div>
             <h3 className="text-base font-bold text-white">Training schedule</h3>
             <p className="text-xs text-slate-400">
-              {plan ? "Planned and completed sessions" : "No active plan. Only logged workouts show here."}
+              {plan
+                ? "Planned and completed sessions"
+                : "No active plan, so only logged workouts show here. Generate one on the Plan tab to plan sessions yourself."}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -266,20 +280,36 @@ export function SchedulePanel({
       <div className={cardClass}>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-base font-bold text-white">{formatDay(selected)}</h3>
-          {selected <= today && (
-            <button
-              type="button"
-              onClick={() => setLogTarget({ session: null, date: selected })}
-              className={btnSecondary}
-            >
-              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-              Log ad hoc session
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {canPlanHere && (
+              <button
+                type="button"
+                onClick={() => setSessionTarget({ kind: "add", date: selected })}
+                className={btnPrimary}
+              >
+                <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                Add session
+              </button>
+            )}
+            {selected <= today && (
+              <button
+                type="button"
+                onClick={() => setLogTarget({ session: null, date: selected })}
+                className={btnSecondary}
+              >
+                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                Log ad hoc session
+              </button>
+            )}
+          </div>
         </div>
 
         {selectedEntries.length === 0 ? (
-          <p className="text-sm text-slate-400">Nothing scheduled or logged on this day.</p>
+          <p className="text-sm text-slate-400">
+            {canPlanHere
+              ? "Nothing scheduled on this day. You can plan a session yourself."
+              : "Nothing scheduled or logged on this day."}
+          </p>
         ) : (
           <ul className="space-y-3">
             {selectedEntries.map((entry) => (
@@ -290,6 +320,7 @@ export function SchedulePanel({
                 isCurrentPlan={entry.session !== null && entry.session.planId === plan?.id}
                 onLog={(session) => setLogTarget({ session, date: session.date })}
                 onMove={setMoveTarget}
+                onEdit={(session) => setSessionTarget({ kind: "edit", session })}
                 onRemove={(session) => {
                   setRemoveError(null);
                   setRemoveTarget(session);
@@ -305,6 +336,19 @@ export function SchedulePanel({
           target={logTarget}
           onClose={() => setLogTarget(null)}
           onLogged={(message) => {
+            onNotice(message);
+            onChanged();
+          }}
+        />
+      )}
+
+      {sessionTarget && plan && (
+        <SessionDialog
+          target={sessionTarget}
+          plan={plan}
+          preferences={preferences}
+          onClose={() => setSessionTarget(null)}
+          onSaved={(message) => {
             onNotice(message);
             onChanged();
           }}
@@ -469,6 +513,7 @@ function DetailRow({
   isCurrentPlan,
   onLog,
   onMove,
+  onEdit,
   onRemove,
 }: {
   entry: DayEntry;
@@ -476,6 +521,7 @@ function DetailRow({
   isCurrentPlan: boolean;
   onLog: (session: PlannedSession) => void;
   onMove: (session: PlannedSession) => void;
+  onEdit: (session: PlannedSession) => void;
   onRemove: (session: PlannedSession) => void;
 }) {
   const { session, workout } = entry;
@@ -550,6 +596,10 @@ function DetailRow({
           <>
             <button type="button" onClick={() => onMove(session)} className={btnSecondary}>
               Move
+            </button>
+            <button type="button" onClick={() => onEdit(session)} className={btnSecondary}>
+              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+              Edit
             </button>
             <button type="button" onClick={() => onRemove(session)} className={btnDanger}>
               <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />

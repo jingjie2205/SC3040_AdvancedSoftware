@@ -165,6 +165,7 @@ export default function TrainingPage() {
           {tab === "schedule" && (
             <SchedulePanel
               plan={plan}
+              preferences={preferences}
               refreshKey={refreshKey}
               onChanged={refresh}
               onNotice={showNotice}

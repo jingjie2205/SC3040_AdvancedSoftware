@@ -11,14 +11,29 @@ import {
   buildSessions,
   firstUnsafeWeek,
   planEndDate,
+  planWeekTarget,
   rescaleForBand,
+  sessionsPerWeek,
+  shareWeek,
+  weekPool,
   weeklyTargets,
+  weightOf,
 } from "./mock-plan";
-import { LOGGABLE_STATUSES, MOVABLE_STATUSES, checkMove } from "./rules";
 import {
+  LOGGABLE_STATUSES,
+  MOVABLE_STATUSES,
+  bandRefusal,
+  checkMove,
+  checkPlacement,
+  defaultDurationMin,
+  isDeloadWeek,
+} from "./rules";
+import {
+  addSessionSchema,
   fieldErrorsFrom,
   generatePlanSchema,
   logWorkoutSchema,
+  sessionChangeSchema,
   sleepSchema,
   trainingPreferencesSchema,
 } from "./schemas";
@@ -340,6 +355,35 @@ function reconcile(planned: PlannedSession, readiness: ReadinessScore): SessionR
   };
 }
 
+/** Every session the fixtures hold, whichever plan it belongs to: a finished session of an old plan still takes its day. */
+function placementContext(s: MockState, plan: TrainingPlan) {
+  return { sessions: s.sessions, planStart: plan.startDate, planEnd: plan.endDate, today: todayISO() };
+}
+
+const weightsOf = (sessions: PlannedSession[]) =>
+  sessions.map((x) => ({ id: x.id, volume: x.targetVolume, weight: weightOf(x.intensityBand, x.targetDurationMin) }));
+
+/** A hand-planned session uses one of the athlete's own activities and an intensity its week allows. */
+function detailProblems(
+  plan: TrainingPlan,
+  preferences: TrainingPreferences,
+  weekMonday: string,
+  activityType: PlannedSession["activityType"] | undefined,
+  band: IntensityBand | undefined,
+): ApiResult<never> | null {
+  const fieldErrors: Record<string, string> = {};
+  if (activityType !== undefined && !preferences.activityTypes.includes(activityType)) {
+    fieldErrors.activityType = "Pick one of your preferred activity types";
+  }
+  if (band !== undefined) {
+    const why = bandRefusal(band, isDeloadWeek(plan, weekMonday));
+    if (why) fieldErrors.intensityBand = why;
+  }
+  return Object.keys(fieldErrors).length > 0
+    ? fail("VALIDATION", "Check the highlighted fields.", { fieldErrors })
+    : null;
+}
+
 function validateLog(input: LogWorkoutInput): ApiResult<LogWorkoutInput> {
   const parsed = logWorkoutSchema.safeParse(input);
   if (!parsed.success) {
@@ -583,15 +627,127 @@ export const mockTrainingApi: TrainingApi = {
     if (!plan || session.planId !== plan.id) {
       return fail("NOT_MOVABLE", "Sessions from a replaced plan can't be moved.");
     }
-    const check = checkMove(session, newDate, {
-      sessions: s.sessions.filter((x) => x.planId === plan.id),
-      planStart: plan.startDate,
-      planEnd: plan.endDate,
-      today: todayISO(),
-    });
+    const check = checkMove(session, newDate, placementContext(s, plan));
     if (!check.ok) return fail(check.code, check.reason, { suggestedDate: check.suggestedDate });
     session.date = newDate;
     session.status = "moved";
+    return ok(session);
+  },
+
+  async addSession(input) {
+    await delay();
+    const s = getState();
+    const plan = s.plan;
+    if (!plan) return fail("NO_PLAN", "Generate a training plan first, then you can plan sessions in it.");
+    if (!s.preferences) return fail("NO_PREFERENCES", "Set your training preferences before planning sessions.");
+    const parsed = addSessionSchema.safeParse(input);
+    if (!parsed.success) {
+      return fail("VALIDATION", "Check the highlighted fields.", { fieldErrors: fieldErrorsFrom(parsed.error) });
+    }
+    const { date, activityType, intensityBand, targetDurationMin } = parsed.data;
+    const monday = startOfWeek(date);
+    const unsuitable = detailProblems(plan, s.preferences, monday, activityType, intensityBand);
+    if (unsuitable) return unsuitable;
+
+    const duration = targetDurationMin ?? defaultDurationMin(s.preferences.sessionDurationMin, intensityBand);
+    const draft: PlannedSession = {
+      id: nextId("s"),
+      planId: plan.id,
+      date,
+      activityType,
+      targetVolume: 0,
+      targetDurationMin: duration,
+      intensityBand,
+      status: "planned",
+    };
+    const check = checkPlacement(draft, date, placementContext(s, plan));
+    if (!check.ok) return fail(check.code, check.reason, { suggestedDate: check.suggestedDate });
+
+    const week = s.sessions.filter((x) => x.planId === plan.id && startOfWeek(x.date) === monday);
+    const movable = week.filter((x) => MOVABLE_STATUSES.includes(x.status));
+    const pool = weekPool(
+      planWeekTarget(plan, monday) ?? 0,
+      week.filter((x) => !MOVABLE_STATUSES.includes(x.status)).reduce((sum, x) => sum + x.targetVolume, 0), // done or missed
+      movable.reduce((sum, x) => sum + x.targetVolume, 0),
+      movable.length + 1,
+      sessionsPerWeek(s.preferences),
+    );
+    if (pool < movable.length + 1) {
+      return fail(
+        "WEEK_FULL",
+        "That week's training load is already planned or done, so there's nothing left to share with another session. Pick another week, or log it as an extra workout once you've done it.",
+      );
+    }
+
+    const share = shareWeek(pool, weightsOf(movable), weightOf(intensityBand, duration));
+    const adjusted = movable.filter((x) => share.others[x.id] !== x.targetVolume);
+    for (const x of adjusted) x.targetVolume = share.others[x.id];
+    const added: PlannedSession = { ...draft, targetVolume: share.newVolume };
+    s.sessions.push(added);
+    return ok({ session: added, adjustedCount: adjusted.length });
+  },
+
+  async updateSession(id, change) {
+    await delay();
+    const s = getState();
+    const plan = s.plan;
+    const parsed = sessionChangeSchema.safeParse(change);
+    if (!parsed.success) {
+      return fail("VALIDATION", "Check the highlighted fields.", { fieldErrors: fieldErrorsFrom(parsed.error) });
+    }
+    const session = s.sessions.find((x) => x.id === id);
+    if (!session) return fail("NOT_FOUND", "That session no longer exists.");
+    if (!plan || session.planId !== plan.id) {
+      return fail("NOT_MOVABLE", "Sessions from a replaced plan can't be changed.");
+    }
+    if (!MOVABLE_STATUSES.includes(session.status)) {
+      return fail("NOT_MOVABLE", "Completed, partial and missed sessions can't be changed.");
+    }
+
+    const activityType = parsed.data.activityType ?? session.activityType;
+    const intensityBand = parsed.data.intensityBand ?? session.intensityBand;
+    const targetDurationMin = parsed.data.targetDurationMin ?? session.targetDurationMin;
+    const newActivity = activityType !== session.activityType;
+    const newBand = intensityBand !== session.intensityBand;
+    const newLength = targetDurationMin !== session.targetDurationMin;
+    if (!newActivity && !newBand && !newLength) {
+      return fail("NO_CHANGE", "That session already looks like that.");
+    }
+    if (!s.preferences) {
+      return fail("NO_PREFERENCES", "Set your training preferences before changing a session.");
+    }
+
+    const monday = startOfWeek(session.date);
+    const unsuitable = detailProblems(
+      plan,
+      s.preferences,
+      monday,
+      newActivity ? activityType : undefined,
+      newBand ? intensityBand : undefined,
+    );
+    if (unsuitable) return unsuitable;
+    if (newBand) {
+      // Only the intensity can break a day rule where the session already stands: a push beside a push.
+      const check = checkPlacement({ ...session, intensityBand }, session.date, placementContext(s, plan));
+      if (!check.ok) return fail(check.code, check.reason);
+    }
+
+    let volume = session.targetVolume;
+    if (newBand || newLength) {
+      // A different weight changes this session's share of the week; the week's total stays what it was.
+      const movable = s.sessions.filter(
+        (x) => x.planId === plan.id && startOfWeek(x.date) === monday && MOVABLE_STATUSES.includes(x.status),
+      );
+      const others = movable.filter((x) => x.id !== session.id);
+      const share = shareWeek(
+        movable.reduce((sum, x) => sum + x.targetVolume, 0),
+        weightsOf(others),
+        weightOf(intensityBand, targetDurationMin),
+      );
+      for (const x of others) x.targetVolume = share.others[x.id];
+      volume = share.newVolume;
+    }
+    Object.assign(session, { activityType, intensityBand, targetDurationMin, targetVolume: volume });
     return ok(session);
   },
 

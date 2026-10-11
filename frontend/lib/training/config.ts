@@ -17,6 +17,9 @@ export const TRAINING_RULES = {
   defaultBaselineVolume: 100,
   partialCompletionRatio: 0.8,
   highIntensityBand: "push",
+  /** What a session counts for when a week's load is shared out, per minute (intensity), and how long it is, by band. */
+  bandWeight: { push: 1, light: 0.7, deload: 0.6 },
+  bandDurationFactor: { push: 1, light: 0.75, deload: 0.6 },
   missedSessionsTrigger: 3,
   lowReadinessDaysTrigger: 3,
   workout: {
