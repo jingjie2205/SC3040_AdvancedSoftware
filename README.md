@@ -32,6 +32,9 @@ Fitra is an intelligent, full-stack web application designed to assist users in 
 ```bash
 cd backend
 
+# Install Python dependencies
+pip install -r requirements.txt
+
 # Start development server with hot reloading
 uvicorn app.main:app --reload --port 8000
 ```
@@ -47,9 +50,3 @@ npm install
 # Start Next.js development server
 npm run dev
 ```
-
-## API Endpoints Reference
-
-### Health & Probes
-
-- `GET /health`: Healthcheck probe.
