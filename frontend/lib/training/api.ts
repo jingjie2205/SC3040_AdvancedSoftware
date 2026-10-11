@@ -23,6 +23,7 @@ import type {
   TrainingPreferences,
   TrainingSummary,
   WorkoutSession,
+  IntensityBand
 } from "./types";
 
 export type ApiErrorCode =
@@ -71,6 +72,17 @@ export interface RemoveResult {
   redistributedCount: number;
 }
 
+export type SessionStatus = "planned" | "completed" | "skipped";
+
+export interface PlannedSessionInput {
+  date: string;
+  activity_type: ActivityType;
+  target_duration_min: number;
+  intensity_band?: IntensityBand;
+  target_volume?: number | null;
+  status?: SessionStatus;
+}
+
 export interface TrainingApi {
   getPreferences(): Promise<TrainingPreferences | null>;
   savePreferences(input: TrainingPreferencesInput): Promise<ApiResult<TrainingPreferences>>;
@@ -96,6 +108,7 @@ export interface TrainingApi {
   respondToSession(id: string, response: SessionResponse): Promise<ApiResult<PlannedSession>>;
   logSession(id: string, input: LogWorkoutInput): Promise<ApiResult<LogResult>>;
   logAdHocSession(input: LogWorkoutInput): Promise<ApiResult<LogResult>>;
+  addPlannedSession(input: PlannedSessionInput): Promise<ApiResult<PlannedSession>>;
 }
 
 export const trainingApi: TrainingApi =

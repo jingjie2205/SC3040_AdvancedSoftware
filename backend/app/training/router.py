@@ -18,6 +18,7 @@ from .models import (
     LogWorkoutInput,
     ModelInfo,
     PlannedSession,
+    PlannedSessionInput,
     RemoveResult,
     RescheduleRequest,
     Schedule,
@@ -106,6 +107,14 @@ def get_schedule(
     end: Annotated[date, Query(alias="to")],
 ):
     return service.get_schedule(user_id, today, start, end)
+
+
+@router.post("/sessions/planned", response_model=PlannedSession)
+def create_planned_session(
+    body: PlannedSessionInput, user_id: UserId, today: Today, service: Service
+):
+    """Add a single planned session (e.g. recommended by AI) directly to the schedule."""
+    return service.add_planned_session(user_id, today, body)
 
 
 @router.patch("/sessions/{session_id}", response_model=PlannedSession)

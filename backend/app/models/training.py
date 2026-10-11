@@ -62,3 +62,11 @@ class TrainingPlanResponse(TrainingPlanBase):
 
     class Config:
         from_attributes = True
+
+class PlannedSessionInput(BaseModel):
+    date: date
+    activity_type: ActivityType
+    target_duration_min: int = Field(ge=5, le=360)
+    intensity_band: IntensityBand = "light"
+    target_volume: Optional[int] = None
+    notes: Optional[str] = None

@@ -285,3 +285,22 @@ class LogWorkoutInput(ApiModel):
     rpe: Optional[int] = Field(default=None, ge=RULES.workout_rpe_min, le=RULES.workout_rpe_max)
     avg_hr: Optional[int] = Field(default=None, ge=RULES.workout_hr_min, le=RULES.workout_hr_max)
     calories: Optional[int] = Field(default=None, ge=0)
+
+class PlannedSessionInput(BaseModel):
+    date: date
+    activity_type: ActivityType
+    target_duration_min: int = Field(ge=5, le=360)
+    intensity_band: IntensityBand = "light"
+    target_volume: Optional[int] = None
+    status: Literal["planned", "completed", "skipped"] = "planned"
+
+class PlannedSession(BaseModel):
+    id: str
+    user_id: str
+    plan_id: Optional[str] = None  # None for ad-hoc / AI-recommended sessions
+    date: date
+    activity_type: ActivityType
+    target_duration_min: int
+    intensity_band: IntensityBand
+    target_volume: Optional[int] = None
+    status: Literal["planned", "completed", "skipped"] = "planned"

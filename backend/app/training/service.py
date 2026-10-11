@@ -213,6 +213,62 @@ class TrainingService:
             ),
         )
         return plan
+    def get_user_plans(self, user_id: str):
+        # Fetch all routine plans for user ordered by creation
+        return self.repo.get_plans(user_id)
+
+    def add_planned_session(
+    self, user_id: str, today: date, body: PlannedSessionInput
+    ) -> PlannedSession:
+        # 1. Fetch user's routine plan using the repository's built-in helper
+        active_plan = self.repo.get_active_plan(user_id)
+        
+        # If the repository uses another attribute for the raw client, fallback gracefully:
+        if not active_plan:
+            client = getattr(self.repo, "client", None) or getattr(self.repo, "_client", None)
+            if client:
+                plan_res = (
+                    client.table("training_routine_plans")
+                    .select("id")
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if plan_res.data:
+                    plan_id = plan_res.data[0]["id"]
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"code": "NO_PLAN", "message": "No training plan found for user."}
+                    )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "NO_PLAN", "message": "No active training plan found for user."}
+                )
+        else:
+            plan_id = active_plan.id
+
+        # 2. Volume calculation fallback
+        volume = body.target_volume
+        if volume is None:
+            volume = int(body.target_duration_min * 1.0)
+
+        # 3. Create session model with the retrieved plan_id
+        session = PlannedSession(
+            id=str(uuid4()),
+            user_id=user_id,
+            plan_id=str(plan_id),
+            date=body.date,
+            activity_type=body.activity_type,
+            target_duration_min=body.target_duration_min,
+            intensity_band=body.intensity_band,
+            target_volume=volume,
+            status=getattr(body, "status", "planned") or "planned",
+        )
+
+        self.repo.apply(user_id, ChangeSet(upsert_sessions=[session]))
+        return session
 
     def recalculate_plan(self, user_id: str, today: date) -> TrainingPlan:
         plan = self.repo.get_active_plan(user_id)
