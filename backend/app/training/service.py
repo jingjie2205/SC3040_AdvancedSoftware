@@ -740,6 +740,7 @@ class TrainingService:
             rpe=data.rpe,
             avg_hr=data.avg_hr,
             calories=data.calories,
+            distance_m=None if data.distance_km is None else round(data.distance_km * 1000, 1),
             source="manual",
             created_at=_now(),
         )

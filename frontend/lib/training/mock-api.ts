@@ -104,9 +104,13 @@ function mockGoal(): Goal | null {
 }
 
 /** Every workout the fixtures make is the athlete's own: Strava logs only come from the real backend. */
-function makeWorkout(fields: Omit<WorkoutSession, "id" | "createdAt" | "externalId">): WorkoutSession {
-  return { id: nextId("w"), createdAt: new Date().toISOString(), externalId: null, ...fields };
+function makeWorkout(
+  fields: Omit<WorkoutSession, "id" | "createdAt" | "externalId" | "distanceM"> & { distanceM?: number | null },
+): WorkoutSession {
+  return { id: nextId("w"), createdAt: new Date().toISOString(), externalId: null, distanceM: null, ...fields };
 }
+
+const toMetres = (km: number | null) => (km === null ? null : Math.round(km * 10000) / 10);
 
 /** Three logged sessions a week for the 4 weeks before `endExclusive` (a Monday). */
 function seedHistory(endExclusive: string): WorkoutSession[] {
@@ -874,7 +878,13 @@ export const mockTrainingApi: TrainingApi = {
     const valid = validateLog(input);
     if (!valid.ok) return valid;
 
-    const workout = makeWorkout({ plannedSessionId: session.id, ...valid.data, source: "manual" });
+    const { distanceKm, ...logged } = valid.data;
+    const workout = makeWorkout({
+      plannedSessionId: session.id,
+      ...logged,
+      distanceM: toMetres(distanceKm),
+      source: "manual",
+    });
     s.workouts.push(workout);
     session.status =
       workout.actualVolume >= R.partialCompletionRatio * session.targetVolume
@@ -912,9 +922,11 @@ export const mockTrainingApi: TrainingApi = {
     await delay();
     const valid = validateLog(input);
     if (!valid.ok) return valid;
+    const { distanceKm, ...logged } = valid.data;
     const workout = makeWorkout({
       plannedSessionId: null,
-      ...valid.data,
+      ...logged,
+      distanceM: toMetres(distanceKm),
       source: "manual",
     });
     getState().workouts.push(workout);

@@ -28,5 +28,6 @@ export const TRAINING_RULES = {
     rpe: { min: 1, max: 10 },
     avgHr: { min: 30, max: 230 },
     calories: { min: 0, max: 20000 },
+    distanceKm: { max: 500 },
   },
 } as const;

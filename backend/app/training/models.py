@@ -124,7 +124,8 @@ class WorkoutSession(ApiModel):
     source: WorkoutSource = "manual"
     # For a log saved from Strava, the id of the Strava activity it came from; None for everything else.
     external_id: Optional[str] = None
-    # Metres, for a log saved from Strava; None for manual logs. Only the leaderboard's mileage view reads it.
+    # Metres, from Strava or typed in when logging a run or ride; None when not given. Only the leaderboard's
+    # mileage view reads it: no training calculation does.
     distance_m: Optional[float] = None
     created_at: datetime
 
@@ -326,3 +327,11 @@ class LogWorkoutInput(ApiModel):
     rpe: Optional[int] = Field(default=None, ge=RULES.workout_rpe_min, le=RULES.workout_rpe_max)
     avg_hr: Optional[int] = Field(default=None, ge=RULES.workout_hr_min, le=RULES.workout_hr_max)
     calories: Optional[int] = Field(default=None, ge=0, le=RULES.workout_calories_max)
+    # Only runs and rides have a distance; the leaderboard's mileage view counts the runs.
+    distance_km: Optional[float] = Field(default=None, gt=0, le=RULES.workout_distance_km_max)
+
+    @model_validator(mode="after")
+    def _distance_only_for_runs_and_rides(self) -> "LogWorkoutInput":
+        if self.distance_km is not None and self.activity_type not in ("run", "cycling"):
+            raise ValueError("Distance can only be given for a run or a ride")
+        return self

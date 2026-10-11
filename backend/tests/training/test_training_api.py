@@ -883,3 +883,14 @@ def test_the_app_as_deployed_builds_its_service_on_the_trained_model(monkeypatch
         assert isinstance(router_module._default_service().scorer, ModelScorer)
     finally:
         router_module._default_service.cache_clear()
+
+
+def test_a_distance_is_accepted_for_a_run_and_refused_for_gym(client, repo):
+    onboard(client, repo)
+    run = {"date": TODAY.isoformat(), "activityType": "run", "actualDurationMin": 30, "actualVolume": 25}
+
+    logged = client.post("/api/v1/training/sessions", json={**run, "distanceKm": 5.2}, headers=headers())
+    assert logged.status_code == 200 and logged.json()["workout"]["distanceM"] == 5200.0
+
+    gym = client.post("/api/v1/training/sessions", json={**run, "activityType": "gym", "distanceKm": 5}, headers=headers())
+    assert gym.status_code == 422

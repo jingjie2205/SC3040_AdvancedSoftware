@@ -72,6 +72,8 @@ export interface WorkoutSession {
   rpe: number | null;
   avgHr: number | null;
   calories: number | null;
+  /** Metres, for a run or ride saved from Strava or logged with a distance; null otherwise. */
+  distanceM: number | null;
   /** "strava" logs were saved from the Strava tab; they show on the schedule and count towards nothing else. */
   source: "manual" | "import" | "strava";
   /** Strava's id for the activity when `source` is "strava" (what "View on Strava" opens), otherwise null. */

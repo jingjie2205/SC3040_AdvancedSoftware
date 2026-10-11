@@ -324,8 +324,13 @@ saves the ones the athlete chooses to their **schedule** as training logs.
   the schedule's own load unit, which has no fixed link to minutes; a Strava log gets 1 point per minute
   (`config.TrainingRules.strava_points_per_minute`), capped at the volume limit. Average heart rate is kept only
   when it is a believable number (30 to 230). The distance is kept in `distance_m` (metres) for the leaderboard's
-  running mileage (`20261011200000_training_strava_distance.sql`). Pace, climb, the name and the route are **not**
-  kept: a card shows them, the log doesn't. The date is the day it happened where the athlete was.
+  running mileage (`20261011200000_training_strava_distance.sql`). A run or ride logged by hand can carry one too:
+  the Log workout form's optional "Distance, km" (`LogWorkoutInput.distance_km`, at most
+  `config.TrainingRules.workout_distance_km_max`), written by `training_apply_changes` since
+  `20261012000000_training_logs_distance.sql`. Like calories, the repository asks `training_schema_features()` before
+  writing one, so a distance is refused rather than dropped on a database without that migration. Pace, climb, the
+  name and the route are **not** kept: a card shows them, the log doesn't. The date is the day it happened where the
+  athlete was.
 - **Hard Rule 1 still holds: a Strava log is shown on the schedule and reaches no AI feature.** The one other
   reader is the leaderboard (gamification), which sums `distance_m` of saved runs for its mileage view; it is not
   an AI feature and reads nothing else from the log. Within training, a Strava log counts towards nothing. It is

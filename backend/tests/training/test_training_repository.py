@@ -320,3 +320,28 @@ def test_any_other_database_error_reading_the_profile_is_not_swallowed():
     client.error = APIError({"message": "permission denied", "code": "42501", "hint": None, "details": None})
     with pytest.raises(APIError):
         repo.get_profile(USER_A)
+
+
+def _with_distance(metres, calories=None):
+    changes = _changes()
+    changes.insert_workouts = [
+        changes.insert_workouts[0].model_copy(update={"distance_m": metres, "calories": calories})
+    ]
+    return changes
+
+
+def test_a_distance_travels_in_the_payload_once_the_database_says_it_can_keep_it():
+    repo, client = repo_with()
+    client.features = {"calories": True, "distance": True}
+    repo.apply(USER_A, _with_distance(5230.0))
+    assert _calls(client) == ["training_schema_features", "training_apply_changes"]
+    assert client.rpcs[1][1]["p_changes"]["insert_workouts"][0]["distance_m"] == 5230.0
+
+
+def test_a_distance_is_refused_not_dropped_on_a_database_that_only_keeps_calories():
+    repo, client = repo_with()  # answers {"calories": True}: the calories migration ran, the distance one didn't
+    repo.apply(USER_A, _with_calories(300))
+    with pytest.raises(TrainingError) as refused:
+        repo.apply(USER_A, _with_distance(5230.0))
+    assert refused.value.code == "UNAVAILABLE" and "Distance" in refused.value.message
+    assert _calls(client).count("training_apply_changes") == 1, "the log with a distance wasn't written"
