@@ -51,11 +51,16 @@ drops the ones whose workout or meal was deleted. While an item is held, nothing
 **Leaderboard.** Friends are users with an accepted request either way in `friend_requests` (the
 Friends page). On the XP and mileage boards, friends with nothing yet are listed with 0.
 
-**Mileage** is the distance of runs saved from Strava in the last 30 days, today included. On the Training
-page's Strava tab the user presses Upload Strava data, checks the activity cards, and saves the ones they
-want ("Save to schedule" or "Save all to schedule"); saving keeps the distance in
-`training_workout_logs.distance_m`. Only runs count (Run, TrailRun, VirtualRun), not rides, and manual logs
-have no distance. Saved Strava logs earn no XP, so mileage can't be farmed for XP.
+**Mileage** is the distance run in the last 30 days, today included, from `training_workout_logs.distance_m`.
+Two things fill it in:
+
+- **Runs logged by hand.** The Training page's Log workout form has an optional "Distance, km" field for a run
+  or a ride.
+- **Runs saved from Strava.** On the Training page's Strava tab the user presses Upload Strava data, checks the
+  activity cards, and saves the ones they want ("Save to schedule" or "Save all to schedule").
+
+Only runs count, not rides, and a run logged without a distance adds nothing. Saved Strava logs earn no XP, so
+mileage can't be farmed for XP.
 
 **Challenges**
 
@@ -192,8 +197,7 @@ in-memory stand-in mirrors the database's unique constraints and the `award_gami
 
 ## Not built yet, and who it depends on
 
-- **Mileage only counts runs saved from Strava.** A run logged by hand on the Training page has no
-  distance field, so it adds nothing.
+- **Mileage relies on the distance being entered.** A run logged by hand without a distance adds nothing.
 - **Challenge rewards are paid when the user next opens their challenges**, not the moment the target is
   reached. The stats panel catches up on the next refresh.
 - **No frontend tests** for this page yet.

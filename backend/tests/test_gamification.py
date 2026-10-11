@@ -880,3 +880,12 @@ def test_mileage_endpoint(client, sb):
 
     assert board["metric"] == "mileage"
     assert board["entries"][0]["userId"] == CAROL and board["entries"][0]["mileageKm"] == 21.1
+
+
+def test_mileage_counts_runs_logged_by_hand_with_a_distance(sb):
+    log_run(sb, ALICE, 6.5, source="manual")
+    log_run(sb, ALICE, 4, source="strava")
+
+    me = next(e for e in svc.get_leaderboard(sb, ALICE, LeaderboardMetric.MILEAGE, 10, TODAY)["entries"] if e["isCurrentUser"])
+
+    assert me["mileageKm"] == 10.5
