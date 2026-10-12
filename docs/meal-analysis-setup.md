@@ -19,7 +19,7 @@ The migration adds nullable `meal_name`, `meal_type`, and `training_context_note
 | `backend/.env` | `SUPABASE_URL` | Existing shared project URL |
 | `backend/.env` | `SUPABASE_SERVICE_ROLE_KEY` | Server-only service-role key |
 | `backend/.env` | `GOOGLE_GENERATIVE_AI_API_KEY` | Gemini API key for photo analysis |
-| `backend/.env` | `GEMINI_NUTRITION_MODEL` | Defaults to `gemini-2.5-flash` |
+| `backend/.env` | `GEMINI_NUTRITION_MODEL` | Defaults to `gemini-3.1-flash-lite` |
 | `backend/.env` | `FRONTEND_URL` | `http://localhost:3000` for local development |
 | `frontend/.env.local` | `NEXT_PUBLIC_SUPABASE_URL` | Same project URL as the backend |
 | `frontend/.env.local` | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public anon/publishable key, never the service-role key |

@@ -1,36 +1,20 @@
--- Training routine, seventh step: the weekly progression a plan was built with.
+-- Training routine, seventh step: a distance on a hand-logged run or ride.
 --
--- Run after 20261011200000_training_logs_calories.sql (which defines the write function). Safe to run again.
+-- Run after 20261011200000_training_logs_calories.sql (whose write function this replaces) and
+-- 20261011200000_training_strava_distance.sql (which adds the distance_m column). Safe to run again.
 --
--- A plan's weekly load used to rise by a fixed 5% for everyone. It now rises by a rate estimated from the athlete's own
--- logged training (backend/app/training/forecast.py), so the plan has to remember which rate it was built with: the
--- targets for each week (including the cap a hand-planned session is shared out under) are worked out from the plan's
--- baseline and this rate. NULL means the standard rate, which is what every plan made before this migration has.
+-- The Log workout form takes an optional distance for a run or a ride. It is kept in training_workout_logs.distance_m
+-- (metres), the same column a saved Strava activity fills, so the leaderboard's running mileage counts runs logged by
+-- hand as well as runs saved from Strava. No training calculation reads it.
 --
--- training_schema_features() is how the backend asks whether this migration has been applied: it now answers
--- {"calories": true, "progression": true}. The column alone doesn't prove the write function stores the rate, so until
--- the backend sees "progression" it builds plans at the standard rate and writes nothing it could lose.
---
--- The write function is replaced with the body from 20261011200000 plus the rate in the plan upsert. A payload without
--- it (an older backend) leaves a stored rate as it was. Existing plans and every other table are untouched.
+-- The write function is the body from 20261011200000_training_logs_calories.sql plus distance_m in the workout
+-- insert. A payload without distance_m (an older backend) still works: the column is left empty.
+-- training_schema_features() now also answers {"distance": true}, so the backend refuses a distance rather than
+-- dropping it on a database that hasn't had this migration.
 
-alter table public.training_routine_plans
-    add column if not exists progression_pct numeric(5, 2);
-
--- There is no "add constraint if not exists", hence the guard.
-do $$
-begin
-    if not exists (
-        select 1 from pg_constraint
-        where conrelid = 'public.training_routine_plans'::regclass
-          and conname = 'training_routine_plans_progression_range'
-    ) then
-        alter table public.training_routine_plans
-            add constraint training_routine_plans_progression_range
-            check (progression_pct is null or (progression_pct >= 0 and progression_pct <= 20));
-    end if;
-end
-$$;
+alter table public.training_workout_logs
+    add column if not exists distance_m numeric(9, 1)
+        check (distance_m >= 0);
 
 create or replace function public.training_schema_features()
 returns jsonb
@@ -38,7 +22,7 @@ language sql
 stable
 set search_path = public
 as $$
-    select jsonb_build_object('calories', true, 'progression', true);
+    select jsonb_build_object('calories', true, 'distance', true);
 $$;
 
 revoke all on function public.training_schema_features() from public, anon, authenticated;
@@ -64,20 +48,18 @@ begin
     if jsonb_array_length(coalesce(p_changes -> 'upsert_plans', '[]'::jsonb)) > 0 then
         insert into training_routine_plans
             (id, user_id, start_date, end_date, weeks, status, baseline_volume, notice,
-             goal, last_adaptation, progression_pct, created_at)
+             goal, last_adaptation, created_at)
         select r.id, p_user_id, r.start_date, r.end_date, r.weeks, r.status, r.baseline_volume,
-               r.notice, r.goal, r.last_adaptation, r.progression_pct, r.created_at
+               r.notice, r.goal, r.last_adaptation, r.created_at
         from jsonb_to_recordset(p_changes -> 'upsert_plans') as r(
             id uuid, start_date date, end_date date, weeks smallint, status text,
             baseline_volume numeric, notice text, goal text, last_adaptation jsonb,
-            progression_pct numeric, created_at timestamptz)
+            created_at timestamptz)
         on conflict (id) do update
             set status = excluded.status,
                 baseline_volume = excluded.baseline_volume,
                 goal = excluded.goal,
-                last_adaptation = excluded.last_adaptation,
-                -- a payload that doesn't mention it (an older backend) leaves the stored rate alone
-                progression_pct = coalesce(excluded.progression_pct, training_routine_plans.progression_pct)
+                last_adaptation = excluded.last_adaptation
             where training_routine_plans.user_id = p_user_id;
     end if;
 
@@ -103,13 +85,13 @@ begin
     if jsonb_array_length(coalesce(p_changes -> 'insert_workouts', '[]'::jsonb)) > 0 then
         insert into training_workout_logs
             (id, user_id, planned_session_id, date, activity_type, actual_volume,
-             actual_duration_min, rpe, avg_hr, calories, source, created_at)
+             actual_duration_min, rpe, avg_hr, calories, distance_m, source, created_at)
         select r.id, p_user_id, r.planned_session_id, r.date, r.activity_type, r.actual_volume,
-               r.actual_duration_min, r.rpe, r.avg_hr, r.calories, r.source, r.created_at
+               r.actual_duration_min, r.rpe, r.avg_hr, r.calories, r.distance_m, r.source, r.created_at
         from jsonb_to_recordset(p_changes -> 'insert_workouts') as r(
             id uuid, planned_session_id uuid, date date, activity_type text, actual_volume numeric,
-            actual_duration_min integer, rpe smallint, avg_hr smallint, calories integer, source text,
-            created_at timestamptz);
+            actual_duration_min integer, rpe smallint, avg_hr smallint, calories integer, distance_m numeric,
+            source text, created_at timestamptz);
     end if;
 end;
 $$;

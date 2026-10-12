@@ -20,6 +20,10 @@ export default function ProfileForm({ initialData }: ProfileFormProps) {
   const [goalEnum, setGoalEnum] = useState<string>(initialData?.fitnessGoal || "MAINTAIN");
 
   const [isSaving, setIsSaving] = useState(false);
+  const [hasSavedMetrics, setHasSavedMetrics] = useState(Boolean(
+    initialData?.age && initialData?.weight && initialData?.height &&
+    initialData?.biologicalSex && initialData?.activityLevel && initialData?.fitnessGoal
+  ));
 
   const activityMultiplier: Record<string, number> = {
     "SEDENTARY": 1.2,
@@ -74,6 +78,7 @@ export default function ProfileForm({ initialData }: ProfileFormProps) {
         fitnessGoal: goalEnum,
       });
       toast.success("Profile metrics updated successfully");
+      setHasSavedMetrics(true);
     } catch (error: any) {
       toast.error(error?.message || "Failed to update profile metrics");
     } finally {
@@ -83,6 +88,9 @@ export default function ProfileForm({ initialData }: ProfileFormProps) {
 
   return (
     <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 backdrop-blur-sm">
+      {!hasSavedMetrics && <p role="status" className="mb-5 rounded-xl border border-amber-900 bg-amber-950/30 p-4 text-sm text-amber-200">
+        Your calorie target is a preview using the values below. Check your details and save your profile to use this target as the default in your nutrition calendar.
+      </p>}
       <div className="flex items-center gap-4 mb-6">
         <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
           <Calculator className="h-6 w-6" />

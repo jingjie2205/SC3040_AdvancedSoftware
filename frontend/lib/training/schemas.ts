@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRAINING_RULES as R } from "./config";
 import { addDays, isValidISODate, todayISO } from "./dates";
-import { ACTIVITY_TYPES, INTENSITY_BANDS, WEEKDAYS } from "./types";
+import { ACTIVITY_TYPES, INTENSITY_BANDS, WEEKDAYS, type ActivityType } from "./types";
 
 /**
  * Shared by the forms and by the API layer, so client and server reject the same input.
@@ -104,7 +104,18 @@ export const logWorkoutSchema = z.object({
   rpe: wholeNumber("RPE", R.workout.rpe.min, R.workout.rpe.max).nullable(),
   avgHr: wholeNumber("Average heart rate", R.workout.avgHr.min, R.workout.avgHr.max).nullable(),
   calories: wholeNumber("Calories", R.workout.calories.min, R.workout.calories.max).nullable(),
+  distanceKm: z
+    .number({ invalid_type_error: "Distance must be a number" })
+    .positive("Distance must be greater than 0")
+    .max(R.workout.distanceKm.max, `Distance must be at most ${R.workout.distanceKm.max} km`)
+    .nullable(),
+}).refine((log) => log.distanceKm === null || DISTANCE_ACTIVITIES.includes(log.activityType), {
+  path: ["distanceKm"],
+  message: "Distance can only be given for a run or a ride",
 });
+
+/** Activities that cover a distance; the leaderboard's mileage view counts the runs. */
+export const DISTANCE_ACTIVITIES: readonly ActivityType[] = ["run", "cycling"];
 
 export type LogWorkoutInput = z.infer<typeof logWorkoutSchema>;
 

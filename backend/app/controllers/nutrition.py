@@ -8,10 +8,35 @@ from postgrest.exceptions import APIError
 from starlette.concurrency import run_in_threadpool
 
 from app.commons.auth.deps import get_current_user_id, get_supabase_admin
-from app.models.nutrition import MealAnalysis, MealCreate, MealRecord
+from app.models.nutrition import CalorieTargetsUpdate, MealAnalysis, MealCreate, MealRecord
 from app.services import nutrition
 
 router = APIRouter(prefix="/api/nutrition", tags=["Nutrition"])
+
+
+@router.get("/calendar")
+def get_calendar(
+    start_date: date,
+    end_date: date,
+    offset_minutes: int = Query(default=0, ge=-720, le=840),
+    user_id: str = Depends(get_current_user_id),
+):
+    if not 0 <= (end_date - start_date).days < 31:
+        raise HTTPException(422, "Choose a date range of 1 to 31 days.")
+    try:
+        return nutrition.calorie_calendar(
+            get_supabase_admin(), user_id, start_date, end_date, offset_minutes
+        )
+    except (APIError, httpx.RequestError) as exc:
+        raise HTTPException(503, "Could not load your calorie calendar. Please retry.") from exc
+
+
+@router.put("/targets")
+def update_targets(body: CalorieTargetsUpdate, user_id: str = Depends(get_current_user_id)):
+    try:
+        return nutrition.save_calorie_targets(get_supabase_admin(), user_id, body)
+    except (APIError, httpx.RequestError) as exc:
+        raise HTTPException(503, "Could not save calorie targets. Please retry.") from exc
 
 
 @router.post("/analyze", response_model=MealAnalysis)

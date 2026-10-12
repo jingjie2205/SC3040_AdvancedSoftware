@@ -122,3 +122,20 @@ export async function saveMeal(meal: MealEstimate & { id: string; meal_type: Mea
 export async function deleteMeal(id: string): Promise<void> {
   await request(`/meals/${id}`, { method: "DELETE" });
 }
+
+export interface CalorieDay {
+  date: string;
+  total_calories: number | null;
+  meal_count: number;
+  target_calories: number | null;
+  target_source: "saved" | "profile" | null;
+}
+
+export async function fetchCalorieCalendar(start: string, end: string, signal?: AbortSignal): Promise<CalorieDay[]> {
+  const offset = -new Date(`${end}T12:00:00`).getTimezoneOffset();
+  return (await request(`/calendar?start_date=${start}&end_date=${end}&offset_minutes=${offset}`, { signal })).json();
+}
+
+export async function saveCalorieTargets(targets: { date: string; target_calories: number }[]): Promise<void> {
+  await request("/targets", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targets }) });
+}

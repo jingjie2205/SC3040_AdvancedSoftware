@@ -5,6 +5,7 @@ node_modules/
 
 # Next.js build output & cache
 .next/
+.next-nutrition-test/
 out/
 
 # TypeScript build info cache

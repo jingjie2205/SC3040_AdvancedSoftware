@@ -529,3 +529,20 @@ def test_replacing_one_users_plan_does_not_touch_the_other():
     service.generate_plan(USER_B, TODAY, GeneratePlanRequest(weeks=4))
     service.generate_plan(USER_B, TODAY, GeneratePlanRequest(weeks=4, confirm_replace=True))
     assert service.get_plan(USER_A, TODAY).id == plan_a.id
+
+
+def test_a_distance_the_athlete_enters_is_kept_in_metres_on_the_log():
+    service, repo, _ = with_plan()
+    run = service.log_ad_hoc_session(USER_A, TODAY, log_input(TODAY, 20, distance_km=5.23))
+    plain = service.log_ad_hoc_session(USER_A, TODAY, log_input(TODAY, 20))
+    assert (run.workout.distance_m, plain.workout.distance_m) == (5230.0, None)
+
+
+def test_a_distance_is_only_for_runs_and_rides_and_within_the_limit():
+    with pytest.raises(ValueError):
+        LogWorkoutInput(date=TODAY, activity_type="gym", actual_duration_min=30, actual_volume=20, distance_km=3)
+    for bad in (0, -1, RULES.workout_distance_km_max + 1):
+        with pytest.raises(ValueError):
+            log_input(TODAY, 20, distance_km=bad)
+    ride = LogWorkoutInput(date=TODAY, activity_type="cycling", actual_duration_min=60, actual_volume=40, distance_km=30)
+    assert ride.distance_km == 30

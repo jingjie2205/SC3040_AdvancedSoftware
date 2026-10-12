@@ -117,8 +117,7 @@ def changes_payload(changes: ChangeSet) -> Dict[str, Any]:
 class SupabaseTrainingRepository:
     def __init__(self, client: Client) -> None:
         self.db = client
-        self._calories_ready = False  # set once the workout log is seen to have its calories column
-        self._progression_ready = False  # set once the write function is seen to keep a plan's progression
+        self._features_ready: Set[str] = set()  # optional log columns the database has said it keeps
 
     # ------------------------------------------------------------------ helpers
 
@@ -324,7 +323,17 @@ class SupabaseTrainingRepository:
 
     def apply(self, user_id: str, changes: ChangeSet) -> None:
         if any(workout.calories is not None for workout in changes.insert_workouts):
-            self._require_calories_support()
+            self._require_feature(
+                "calories",
+                "Calories aren't set up on this database yet. Apply the latest training migration, "
+                "or log the workout without calories.",
+            )
+        if any(workout.distance_m is not None for workout in changes.insert_workouts):
+            self._require_feature(
+                "distance",
+                "Distance isn't set up on this database yet. Apply the latest training migration, "
+                "or log the workout without a distance.",
+            )
         if any(plan.progression_pct is not None for plan in changes.upsert_plans) and not self.supports_plan_progression():
             raise TrainingError(
                 "UNAVAILABLE",
@@ -342,7 +351,7 @@ class SupabaseTrainingRepository:
         are built at the standard rate and nothing is dropped quietly. Only a yes is remembered, so applying the
         migration takes effect without a restart.
         """
-        if self._progression_ready:
+        if "progression" in self._features_ready:
             return True
         try:
             features = self.db.rpc("training_schema_features", {}).execute().data
@@ -350,32 +359,31 @@ class SupabaseTrainingRepository:
             if error.code not in _FUNCTION_NOT_READY:
                 raise
             return False
-        self._progression_ready = isinstance(features, dict) and features.get("progression") is True
-        return self._progression_ready
+        if isinstance(features, dict) and features.get("progression") is True:
+            self._features_ready.add("progression")
+            return True
+        return False
 
-    def _require_calories_support(self) -> None:
+    def _require_feature(self, feature: str, refusal_message: str) -> None:
         """
-        The write function skips keys it doesn't know, so on a database whose write function predates the calories
-        migration a log would save and the calories the athlete typed would quietly vanish, even if someone has added
-        the column by hand (the live project had). The migration adds training_schema_features(); ask it first and
-        refuse instead. Once the answer has been yes it isn't asked again.
+        The write function skips keys it doesn't know, so on a database whose write function predates a column's
+        migration a log would save and the value the athlete typed (calories, distance) would quietly vanish, even if
+        someone has added the column by hand (the live project had, for calories). The migrations add
+        training_schema_features(); ask it first and refuse instead. Once a feature has been confirmed it isn't
+        asked about again.
         """
-        if self._calories_ready:
+        if feature in self._features_ready:
             return
-        refusal = TrainingError(
-            "UNAVAILABLE",
-            "Calories aren't set up on this database yet. Apply the latest training migration, "
-            "or log the workout without calories.",
-        )
+        refusal = TrainingError("UNAVAILABLE", refusal_message)
         try:
             features = self.db.rpc("training_schema_features", {}).execute().data
         except APIError as error:
             if error.code not in _FUNCTION_NOT_READY:
                 raise
             raise refusal from error
-        if not (isinstance(features, dict) and features.get("calories") is True):
+        if not (isinstance(features, dict) and features.get(feature) is True):
             raise refusal
-        self._calories_ready = True
+        self._features_ready.add(feature)
 
 
 class ThreadLocalClient:

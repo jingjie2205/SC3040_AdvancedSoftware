@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -76,12 +77,25 @@ class Query:
         self.op, self.payload = "insert", value
         return self
 
+    def upsert(self, value, on_conflict):
+        assert on_conflict == "user_id,date"
+        self.op, self.payload = "upsert", value
+        return self
+
     def delete(self):
         self.op = "delete"
         return self
 
     def execute(self):
         rows = self.db.rows.setdefault(self.table, [])
+        if self.op == "upsert":
+            for new in self.payload:
+                existing = next((row for row in rows if (row["user_id"], row["date"]) == (new["user_id"], new["date"])), None)
+                if existing is None:
+                    rows.append(new.copy())
+                else:
+                    existing.update(new)
+            return SimpleNamespace(data=self.payload)
         if self.op == "insert":
             rows.append(self.payload)
             return SimpleNamespace(data=[self.payload])
@@ -340,14 +354,82 @@ async def test_missing_ai_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gemini_request_serializes_with_real_sdk(monkeypatch):
+    data = payload()
+    estimate = {
+        key: data[key]
+        for key in ("meal_name", "confidence_score", "training_context_note", "items")
+    }
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": json.dumps(estimate)}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+            },
+        )
+
+    client_factory = nutrition.genai.Client
+    monkeypatch.setattr(
+        nutrition,
+        "get_settings",
+        lambda: SimpleNamespace(
+            GOOGLE_GENERATIVE_AI_API_KEY="fixture-key",
+            GEMINI_NUTRITION_MODEL="gemini-3.1-flash-lite",
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        monkeypatch.setattr(
+            nutrition.genai,
+            "Client",
+            lambda **kwargs: client_factory(
+                api_key=kwargs["api_key"],
+                http_options=nutrition.types.HttpOptions(httpx_async_client=http_client),
+            ),
+        )
+        result = await nutrition.analyze_image(image_bytes(), "after run")
+
+    assert result.total_calories == 195
+    assert len(requests) == 1
+    schema = requests[0]["generationConfig"]["responseSchema"]
+    weight_schema = schema["properties"]["items"]["items"]["properties"]["estimated_weight_g"]
+    assert "minimum" not in weight_schema
+    assert "maximum" not in weight_schema
+    assert "exclusiveMinimum" not in weight_schema
+    assert "maxItems" not in schema["properties"]["items"]
+    assert "additionalProperties" not in schema
+    assert "maxLength" not in schema["properties"]["meal_name"]
+    assert requests[0]["contents"][0]["parts"][0]["inlineData"]["mimeType"] == "image/jpeg"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "scenario,expected",
     [
         ("valid", 200),
         ("empty", 422),
         ("invalid", 422),
+        ("zero_weight", 422),
+        ("negative_nutrient", 422),
+        ("invalid_confidence", 422),
+        ("too_many_items", 422),
         ("timeout", 504),
         ("quota", 429),
+        ("bad_request", 502),
+        ("credentials", 502),
+        ("denied", 502),
+        ("missing_model", 502),
+        ("unavailable", 502),
     ],
 )
 async def test_gemini_response_handling(monkeypatch, scenario, expected):
@@ -358,13 +440,29 @@ async def test_gemini_response_handling(monkeypatch, scenario, expected):
     }
     if scenario == "empty":
         estimate["items"] = []
+    if scenario == "zero_weight":
+        estimate["items"][0]["estimated_weight_g"] = 0
+    if scenario == "negative_nutrient":
+        estimate["items"][0]["calories"] = -1
+    if scenario == "invalid_confidence":
+        estimate["confidence_score"] = 80
+    if scenario == "too_many_items":
+        estimate["items"] *= 51
     response_text = "not JSON" if scenario == "invalid" else json.dumps(estimate)
     generate = AsyncMock(return_value=SimpleNamespace(text=response_text))
     if scenario == "timeout":
         generate.side_effect = TimeoutError()
-    if scenario == "quota":
-        generate.side_effect = nutrition.errors.ClientError(
-            429, {"error": {"message": "quota"}}
+    provider_errors = {
+        "quota": (429, "usage limit"),
+        "bad_request": (400, "rejected the request"),
+        "credentials": (401, "credentials are invalid"),
+        "denied": (403, "access is denied"),
+        "missing_model": (404, "configured analysis model"),
+        "unavailable": (503, "temporarily unavailable"),
+    }
+    if scenario in provider_errors:
+        generate.side_effect = nutrition.errors.APIError(
+            provider_errors[scenario][0], {"error": {"message": "provider error"}}
         )
 
     class AsyncClient:
@@ -391,6 +489,8 @@ async def test_gemini_response_handling(monkeypatch, scenario, expected):
         with pytest.raises(HTTPException) as exc:
             await nutrition.analyze_image(image_bytes(), "after run")
         assert exc.value.status_code == expected
+        if scenario in provider_errors:
+            assert provider_errors[scenario][1] in exc.value.detail
     else:
         result = await nutrition.analyze_image(image_bytes(), "after run")
         assert result.total_calories == 195
@@ -451,3 +551,54 @@ def test_missing_profile_or_migration_has_actionable_error(
     monkeypatch.setattr(db, "rpc", fail)
     result = api.post("/api/nutrition/meals", json=payload())
     assert result.status_code == status
+
+
+def test_calendar_targets_persist_and_are_user_scoped(client):
+    api, db = client
+    db.rows['nutrition_calorie_targets'] = [{'user_id': OTHER, 'date': '2026-10-11', 'target_calories': 999}]
+    body = {'targets': [{'date': '2026-10-11', 'target_calories': 2200}, {'date': '2026-10-12', 'target_calories': 2400}]}
+    assert api.put('/api/nutrition/targets', json=body).status_code == 200
+    body['targets'][0]['target_calories'] = 2300
+    assert api.put('/api/nutrition/targets', json={'targets': body['targets'][:1]}).status_code == 200
+    days = api.get('/api/nutrition/calendar?start_date=2026-10-11&end_date=2026-10-17').json()
+    assert len(days) == 7
+    assert days[0]['target_calories'] == 2300
+    assert days[1]['target_calories'] == 2400
+    assert days[0]['target_source'] == 'saved'
+    assert days[2]['target_calories'] is None
+    assert days[0]['total_calories'] == 0
+    assert db.rows['nutrition_calorie_targets'][0]['target_calories'] == 999
+    assert len(db.rows['nutrition_calorie_targets']) == 3
+
+
+@pytest.mark.parametrize('targets', [[], [{'date': 'invalid', 'target_calories': 2000}], [{'date': '2026-10-11', 'target_calories': value} for value in [2000, 2100]], *[[{'date': '2026-10-11', 'target_calories': value}] for value in [-1, 0, 1.5, 100001, '2000']]])
+def test_calendar_rejects_invalid_targets(client, targets):
+    api, _ = client
+    assert api.put('/api/nutrition/targets', json={'targets': targets}).status_code == 422
+
+
+def test_calendar_profile_estimate_and_local_intake(client):
+    api, db = client
+    db.rows['users'] = [{'user_id': USER, 'age': 33, 'weight': 70, 'height': 175, 'biological_sex': 'MALE', 'activity_level': 'SEDENTARY', 'fitness_goal': 'MAINTAIN'}]
+    db.rows['meal_plans'] = [
+        {'user_id': USER, 'timestamp': '2026-10-10T16:00:00+00:00', 'total_calories': 400},
+        {'user_id': USER, 'timestamp': '2026-10-11T15:59:59.999999+00:00', 'total_calories': 100},
+        {'user_id': USER, 'timestamp': '2026-10-11T16:00:00+00:00', 'total_calories': None},
+        {'user_id': OTHER, 'timestamp': '2026-10-10T18:00:00+00:00', 'total_calories': 900},
+    ]
+    days = api.get('/api/nutrition/calendar?start_date=2026-10-11&end_date=2026-10-12&offset_minutes=480').json()
+    assert days[0]['total_calories'] == 500
+    assert days[0]['meal_count'] == 2
+    assert days[1]['total_calories'] is None
+    assert days[0]['target_calories'] == 1961
+    assert days[0]['target_source'] == 'profile'
+    assert api.get('/api/nutrition/calendar?start_date=2026-10-12&end_date=2026-10-11').status_code == 422
+    assert api.get('/api/nutrition/calendar?start_date=2026-10-01&end_date=2026-11-01').status_code == 422
+
+
+def test_calendar_requires_authentication():
+    app = FastAPI()
+    app.include_router(controller.router)
+    with TestClient(app) as api:
+        assert api.get('/api/nutrition/calendar?start_date=2026-10-11&end_date=2026-10-17').status_code in (401, 403)
+        assert api.put('/api/nutrition/targets', json={'targets': [{'date': '2026-10-11', 'target_calories': 2200}]}).status_code in (401, 403)

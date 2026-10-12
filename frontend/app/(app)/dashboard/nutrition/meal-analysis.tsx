@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import CalorieCalendar from "./calorie-calendar";
 import { ArrowRight, Camera, Check, Flame, Leaf, LoaderCircle, Plus, ScanLine, Sparkles, Trash2, Upload, Utensils } from "lucide-react";
 import { analyzeMeal, deleteMeal, fetchDailyLog, mealTotals, mealTypes, saveMeal, scaleItem, type DailyLog, type FoodItem, type MealEstimate, type MealType } from "@/lib/nutrition";
 
@@ -86,7 +87,8 @@ export default function MealAnalysis() {
     operation.current = true; setBusy("save"); setError(""); setSuccess("");
     try {
       await saveMeal({ meal_name: draft.meal_name, confidence_score: draft.confidence_score,
-        training_context_note: draft.training_context_note, items: draft.items,
+        training_context_note: draft.training_context_note,
+        items: draft.items.map(item => ({ ...item, estimated_weight_g: item.estimated_weight_g > 0 ? item.estimated_weight_g : 100 })),
         id: draftId, meal_type: mealType, logged_at: loggedAt });
       setDraft(null); setFile(null); setNotes(""); setSuccess("Meal saved. Your daily totals have been updated.");
       setDay(localDate(new Date(loggedAt))); setRevision(value => value + 1);
@@ -110,6 +112,7 @@ export default function MealAnalysis() {
       <div><p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400"><Leaf size={14} /> Nutrition</p><h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Fuel your next best.</h1><p className="mt-3 max-w-xl text-sm leading-6 text-slate-400">A little clarity on your plate. Capture a meal, review the details, and keep your recovery on track.</p></div>
       <span className="flex items-center gap-2 rounded-full border border-emerald-900 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-300"><Sparkles size={14} /> AI-assisted meal analysis</span>
     </header>
+    <CalorieCalendar selectedDay={day} onSelectDay={setDay} revision={revision} />
     <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-slate-400">{["Capture your meal", "Review & adjust", "Save to your day"].map((step, index) => <span key={step} className="flex items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rounded-full border border-slate-700 text-emerald-400">{index + 1}</span>{step}{index < 2 && <ArrowRight size={13} className="ml-2 text-slate-700" />}</span>)}</div>
     {error && <div role="alert" className="rounded-xl border border-rose-900 bg-rose-950/40 p-4 text-sm text-rose-200">{error}</div>}
     {success && <div role="status" className="flex items-center gap-2 rounded-xl border border-emerald-800 bg-emerald-950/40 p-4 text-sm text-emerald-200"><Check size={18} />{success}</div>}
@@ -141,7 +144,7 @@ export default function MealAnalysis() {
             <p className="text-xs leading-5 text-slate-400">Adjust grams to scale nutrients automatically. Enter nutrition values for the full portion when adding a missing ingredient.</p>
             {draft.items.map((item, index) => <div key={index} className="space-y-3 rounded-xl border border-slate-800 p-4">
               <div className="flex items-center gap-2"><input required maxLength={120} aria-label={`Ingredient ${index + 1} name`} placeholder="Ingredient name" value={item.name} onChange={event => updateItem(index, { ...item, name: event.target.value })} className={input} /><button type="button" aria-label={`Remove ingredient ${index + 1}`} onClick={() => setDraft({ ...draft, items: draft.items.filter((_, i) => i !== index) })} className="rounded-lg p-2 text-slate-500 hover:bg-rose-950 hover:text-rose-300"><Trash2 size={17} /></button></div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">{([ ["estimated_weight_g", "Weight (g)"], ["calories", "Calories"], ["protein_g", "Protein (g)"], ["carbs_g", "Carbs (g)"], ["fat_g", "Fat (g)"] ] as const).map(([key, label]) => <label key={key} className="text-xs text-slate-400">{label}<input type="number" required min={key === "estimated_weight_g" ? 0.1 : 0} max={key === "estimated_weight_g" ? 10000 : 100000} step="any" value={display(item[key])} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= 0) updateItem(index, key === "estimated_weight_g" ? scaleItem(item, value) : { ...item, [key]: value }); }} className={`${input} mt-1.5 px-2 tabular-nums`} /></label>)}</div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">{([ ["estimated_weight_g", "Weight (g)"], ["calories", "Calories"], ["protein_g", "Protein (g)"], ["carbs_g", "Carbs (g)"], ["fat_g", "Fat (g)"] ] as const).map(([key, label]) => <label key={key} className="text-xs text-slate-400">{label}<input type="number" required min={key === "estimated_weight_g" ? 0.1 : 0} max={key === "estimated_weight_g" ? 10000 : 100000} step="any" placeholder={key === "estimated_weight_g" ? "100" : "0"} value={item[key] === 0 ? "" : display(item[key])} onFocus={event => event.target.select()} onChange={event => { const clean = event.target.value.replace(/^0+(?=\d)/, ""); if (clean !== event.target.value) { event.target.value = clean; } const raw = event.target.value; if (raw === "") { updateItem(index, key === "estimated_weight_g" ? { ...item, estimated_weight_g: 0 } : { ...item, [key]: 0 }); return; } const value = Number(raw); if (Number.isFinite(value) && value >= 0) updateItem(index, key === "estimated_weight_g" ? scaleItem(item, value) : { ...item, [key]: value }); }} className={`${input} mt-1.5 px-2 tabular-nums`} /></label>)}</div>
             </div>)}
             {!draft.items.length && <p className="text-sm text-amber-300">Add at least one ingredient before saving.</p>}
             <p className="text-xs leading-5 text-slate-500">Photo estimates can miss ingredients and portion sizes. Check the values before you save.</p>

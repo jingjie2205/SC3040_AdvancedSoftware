@@ -101,11 +101,12 @@ failures use the same shape (status 422), including request-body validation on t
      `training_schema_features()` is added, which the backend asks before it accepts calories (it answers
      `{"calories": true}` only once the write function keeps them, which the column alone doesn't prove). It **is safe
      to run again** and changes no existing row.
-   - `supabase/migrations/20261011300000_training_plan_progression.sql` lets a plan remember the weekly progression
+   - `supabase/migrations/20261012100000_training_plan_progression.sql` (run after `20261012000000_training_logs_distance.sql`,
+     whose write function it extends) lets a plan remember the weekly progression
      it was built with: one nullable column, `training_routine_plans.progression_pct` (0 to 20, null meaning the
      standard rate, which every earlier plan has), a range check, the write function `training_apply_changes`
      replaced with the same body plus that column (a payload without it, from an older backend, leaves a stored
-     rate alone), and `training_schema_features()` extended to `{"calories": true, "progression": true}`. It **is
+     rate alone), and `training_schema_features()` extended to `{"calories": true, "distance": true, "progression": true}`. It **is
      safe to run again**, changes no existing row and touches no other table. It was run against a throwaway
      Postgres (PGlite) loaded with the earlier migrations, including a replay of the payloads the service sends.
 
@@ -116,7 +117,7 @@ failures use the same shape (status 422), including request-body validation on t
    Apply the fourth before anyone saves Strava activities on a project that has the gamification trigger.
    Logging a workout **with** calories answers 503 ("Calories aren't set up on this database yet") until the fifth
    is applied, instead of saving the log and losing the number; a log without calories is never affected.
-   Until the sixth is applied, plans are built at the standard rate and store no rate (`progression_pct` stays null,
+   Until the progression migration is applied, plans are built at the standard rate and store no rate (`progression_pct` stays null,
    and the backend refuses to write one rather than lose it). `GET /training/plan/forecast` works either way: the
    Plan tab shows what a plan would use today, and only compares it with the plan's own rate when the plan has one.
 3. **Check it landed.** In the SQL editor:
@@ -245,7 +246,7 @@ harness isn't part of the repo.
   next four weeks with an 80% band, and the back-test numbers. Every number is in `config.ForecastRules`.
   - *Private and safe:* the view is the owner's own and carries no readiness score, check-in or sleep, only the
     acute:chronic load ratio. It reads logged workouts and planned sessions, nothing else.
-  - *Needs the sixth migration to be stored* (see "Turning it on"); the forecast itself needs nothing.
+  - *Needs the progression migration to be stored* (see "Turning it on"); the forecast itself needs nothing.
   - *Tests:* `test_training_forecast.py` (the series, the smoothing against a hand-worked example, the back-test,
     the track record, completion, the rate, the plan it ends up in, the API's fields against the frontend's types,
     and the frontend's copy of the settings). 55 deliberate breakages of this code were each caught. Its TypeScript
@@ -382,8 +383,13 @@ saves the ones the athlete chooses to their **schedule** as training logs.
   the schedule's own load unit, which has no fixed link to minutes; a Strava log gets 1 point per minute
   (`config.TrainingRules.strava_points_per_minute`), capped at the volume limit. Average heart rate is kept only
   when it is a believable number (30 to 230). The distance is kept in `distance_m` (metres) for the leaderboard's
-  running mileage (`20261011200000_training_strava_distance.sql`). Pace, climb, the name and the route are **not**
-  kept: a card shows them, the log doesn't. The date is the day it happened where the athlete was.
+  running mileage (`20261011200000_training_strava_distance.sql`). A run or ride logged by hand can carry one too:
+  the Log workout form's optional "Distance, km" (`LogWorkoutInput.distance_km`, at most
+  `config.TrainingRules.workout_distance_km_max`), written by `training_apply_changes` since
+  `20261012000000_training_logs_distance.sql`. Like calories, the repository asks `training_schema_features()` before
+  writing one, so a distance is refused rather than dropped on a database without that migration. Pace, climb, the
+  name and the route are **not** kept: a card shows them, the log doesn't. The date is the day it happened where the
+  athlete was.
 - **Hard Rule 1 still holds: a Strava log is shown on the schedule and reaches no AI feature.** The one other
   reader is the leaderboard (gamification), which sums `distance_m` of saved runs for its mileage view; it is not
   an AI feature and reads nothing else from the log. Within training, a Strava log counts towards nothing. It is

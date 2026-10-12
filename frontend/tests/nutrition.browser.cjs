@@ -15,11 +15,16 @@ async function main() {
   });
   await new Promise(resolve => auth.listen(54329, "127.0.0.1", resolve));
   const frontend = path.resolve(__dirname, "..");
-  const output = path.join(frontend, ".next", "nutrition-qa");
+  const output = path.join(frontend, ".next-nutrition-test", "nutrition-qa");
   fs.mkdirSync(output, { recursive: true });
+  // Next rewrites these shared type files even when the build directory is isolated.
+  const typeFiles = ["tsconfig.json", "next-env.d.ts"].map(name => {
+    const file = path.join(frontend, name);
+    return { file, content: fs.readFileSync(file) };
+  });
   const server = spawn(process.execPath, ["-e", "require('next/dist/server/lib/start-server').startServer({dir:process.cwd(),isDev:true,port:3107,hostname:'127.0.0.1',allowRetry:false})"], {
     cwd: frontend, windowsHide: true,
-    env: { ...process.env, NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54329", NEXT_PUBLIC_SUPABASE_ANON_KEY: "test-anon-key", NEXT_PUBLIC_BACKEND_URL: "http://127.0.0.1:54329", NEXT_PUBLIC_STRAVA_CLIENT_ID: "", NEXT_PUBLIC_STRAVA_REDIRECT_URI: "" },
+    env: { ...process.env, NUTRITION_BROWSER_TEST: "1", NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54329", NEXT_PUBLIC_SUPABASE_ANON_KEY: "test-anon-key", NEXT_PUBLIC_BACKEND_URL: "http://127.0.0.1:54329", NEXT_PUBLIC_STRAVA_CLIENT_ID: "", NEXT_PUBLIC_STRAVA_REDIRECT_URI: "" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let serverLog = "";
@@ -39,10 +44,31 @@ async function main() {
     let meals = [];
     let savedBody;
     let analysisCalls = 0;
+    const targets = new Map();
+    let rejectTarget = false;
     await context.route("**/api/nutrition/**", async route => {
       const req = route.request();
       const headers = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" };
       if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers });
+      if (req.url().endsWith("/targets") && req.method() === "PUT") {
+        if (rejectTarget) return route.fulfill({ status: 503, headers, json: { detail: "Target save failed. Please retry." } });
+        const body = req.postDataJSON();
+        assert.equal(body.targets.length, 1);
+        for (const target of body.targets) targets.set(target.date, target.target_calories);
+        return route.fulfill({ headers, json: body.targets });
+      }
+      if (req.url().includes("/calendar?")) {
+        const start = new URL(req.url()).searchParams.get("start_date");
+        const days = Array.from({ length: 7 }, (_, index) => {
+          const date = new Date(`${start}T12:00:00`);
+          date.setDate(date.getDate() + index);
+          const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+          return { date: day,
+            total_calories: meals.reduce((sum, meal) => sum + meal.total_calories, 0), meal_count: meals.length,
+            target_calories: targets.get(day) ?? 2200 + index * 100, target_source: "saved" };
+        });
+        return route.fulfill({ headers, json: days });
+      }
       if (req.url().endsWith("/analyze")) {
         analysisCalls++;
         return route.fulfill({ headers, json: { meal_name: "Photo rice bowl", confidence_score: 0.85,
@@ -62,6 +88,33 @@ async function main() {
     page.on("pageerror", error => errors.push(error.message));
     await page.goto("http://localhost:3107/dashboard/nutrition");
     await page.getByText("A fresh plate, a fresh start.").waitFor();
+    const calendar = page.getByRole("region", { name: "Your calorie calendar" });
+    await calendar.getByText("2,200 target", { exact: true }).waitFor();
+    const cards = calendar.locator("button[aria-pressed]");
+    assert.equal(await cards.count(), 7);
+    assert.equal(await cards.first().getAttribute("aria-current"), "date");
+    assert.equal(await calendar.getByText("Available to eat", { exact: true }).count(), 6);
+    await cards.nth(1).click();
+    await calendar.getByLabel("Daily target (kcal)").fill("2800");
+    rejectTarget = true;
+    await calendar.getByRole("button", { name: "Save day's target" }).click();
+    await calendar.getByRole("alert").filter({ hasText: "Target save failed" }).waitFor();
+    assert.equal(await calendar.getByLabel("Daily target (kcal)").inputValue(), "2800");
+    await cards.nth(1).getByText("2,300 target", { exact: true }).waitFor();
+    rejectTarget = false;
+    await calendar.getByRole("button", { name: "Save day's target" }).click();
+    await calendar.getByRole("status").waitFor();
+    await cards.nth(1).getByText("2,800 target", { exact: true }).waitFor();
+    await cards.first().getByText("2,200 target", { exact: true }).waitFor();
+    await page.reload();
+    await cards.nth(1).getByText("2,800 target", { exact: true }).waitFor();
+    assert.equal(targets.size, 1);
+    await calendar.getByRole("button", { name: "Previous seven days" }).click();
+    await calendar.getByText("2,200 target", { exact: true }).waitFor();
+    assert.equal(await calendar.getByText("Consumed", { exact: true }).count(), 7);
+    await cards.first().click();
+    assert.equal(await cards.first().getAttribute("aria-pressed"), "true");
+    await calendar.getByRole("button", { name: "Today", exact: true }).click();
     await page.screenshot({ path: path.join(output, "desktop.png"), fullPage: true });
     await page.getByLabel("Choose meal photo", { exact: true }).setInputFiles({ name: "meal.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64") });
     await page.getByRole("button", { name: "Analyze meal", exact: true }).click();
@@ -75,6 +128,7 @@ async function main() {
     await page.getByLabel("Calories", { exact: true }).fill("200");
     await page.getByLabel("Protein (g)", { exact: true }).fill("4");
     await page.getByLabel("Carbs (g)", { exact: true }).fill("42");
+    await page.getByLabel("Fat (g)", { exact: true }).fill("0.5");
     await page.getByLabel("Weight (g)", { exact: true }).fill("200");
     assert.equal(await page.getByLabel("Calories", { exact: true }).inputValue(), "400");
     await page.getByRole("button", { name: "Add ingredient" }).click();
@@ -86,6 +140,7 @@ async function main() {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     await page.getByRole("button", { name: "Confirm & log meal" }).click();
     await page.getByText("Meal saved. Your daily totals have been updated.").waitFor();
+    await cards.first().getByText("1,800 remaining", { exact: true }).waitFor();
     assert.equal(savedBody.items.length, 1);
     assert.equal(savedBody.items[0].calories, 400);
     assert.equal(savedBody.meal_type, "lunch");
@@ -93,7 +148,10 @@ async function main() {
     await page.getByRole("button", { name: "Delete meal", exact: true }).click();
     await page.getByRole("button", { name: "Yes, delete" }).click();
     await page.getByText("A fresh plate, a fresh start.").waitFor();
+    await cards.first().getByText("No meals logged", { exact: true }).waitFor();
     assert.deepEqual(errors, []);
+    console.log("PASS: nutrition calendar, per-day target persistence and retry, mobile layout, and meal save/delete workflow.");
+    if (process.argv.includes("--nutrition-only")) return;
     await page.goto("http://localhost:3107/dashboard/settings");
     await page.getByRole("heading", { name: "Profile & TDEE Engine" }).waitFor();
     assert.equal(await page.getByRole("spinbutton").first().inputValue(), "33");
@@ -111,7 +169,14 @@ async function main() {
     throw error;
   } finally {
     await browser?.close();
-    server.kill();
+    if (server.exitCode === null && server.signalCode === null) {
+      const stopped = new Promise(resolve => server.once("exit", resolve));
+      server.kill();
+      await stopped;
+    }
+    for (const { file, content } of typeFiles) {
+      if (!fs.readFileSync(file).equals(content)) fs.writeFileSync(file, content);
+    }
     server.stdout.destroy(); server.stderr.destroy(); server.unref();
     auth.close();
     auth.closeAllConnections();

@@ -1,8 +1,8 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 # --- Food Items ---
@@ -43,6 +43,25 @@ class MealPlanResponse(MealPlanBase):
 
 
 Nutrient = Annotated[float, Field(ge=0, le=100000, allow_inf_nan=False)]
+
+
+class CalorieTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date: date
+    target_calories: int = Field(gt=0, le=100000, strict=True)
+
+
+class CalorieTargetsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    targets: list[CalorieTarget] = Field(min_length=1, max_length=31)
+
+    @model_validator(mode="after")
+    def unique_dates(self):
+        if len({target.date for target in self.targets}) != len(self.targets):
+            raise ValueError("Each date must appear only once.")
+        return self
 
 
 class FoodItem(BaseModel):
