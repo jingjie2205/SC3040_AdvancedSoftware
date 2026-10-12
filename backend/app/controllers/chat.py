@@ -3,7 +3,7 @@ from uuid import UUID
 from datetime import datetime, timezone, date
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 import httpx
 from postgrest.exceptions import APIError
 from starlette.concurrency import run_in_threadpool
@@ -61,6 +61,39 @@ async def create_chat_session(
     return res.data[0]
 
 
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_chat_session(
+    session_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+):
+    supabase = get_supabase_admin()
+
+    def _delete():
+        session_res = (
+            supabase.table("chat_sessions")
+            .select("session_id")
+            .eq("session_id", str(session_id))
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if not session_res.data:
+            return False
+
+        supabase.table("chat_messages").delete().eq(
+            "session_id", str(session_id)
+        ).execute()
+        supabase.table("chat_sessions").delete().eq(
+            "session_id", str(session_id)
+        ).eq("user_id", user_id).execute()
+        return True
+
+    deleted = await run_in_threadpool(_delete)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/sessions/{session_id}", response_model=SessionDetailResponse)
 async def get_chat_history(session_id: UUID, user_id: str = Depends(get_current_user_id)):
     supabase = get_supabase_admin()
@@ -77,7 +110,11 @@ async def get_chat_history(session_id: UUID, user_id: str = Depends(get_current_
 
         msg_res = (
             supabase.table("chat_messages")
-            .select("message_id, session_id, sender, content, timestamp, has_health_flag")
+            .select(
+                "message_id, session_id, sender, content, timestamp, has_health_flag, "
+                "planned_session, nutrition_plan, nutrition_schedule"
+                ", weekly_training_plan"
+            )
             .eq("session_id", str(session_id))
             .order("timestamp", desc=False)
             .execute()
@@ -145,6 +182,7 @@ async def send_chat_message(
         )
         ctx = user_info[0] if user_info else {}
         ctx["today"] = date.today().isoformat()
+        ctx["training_schedule"] = body.training_schedule
         return session_res.data[0], past, ctx
 
     session_data, past_messages, athlete_context = await run_in_threadpool(_verify_and_prepare)
@@ -162,6 +200,8 @@ async def send_chat_message(
     reply_text = ai_result.get("reply") or "I processed your request."
     planned_session = ai_result.get("recommended_session") or ai_result.get("planned_session")
     nutrition_plan = ai_result.get("nutrition_plan")
+    nutrition_schedule = ai_result.get("nutrition_schedule")
+    weekly_training_plan = ai_result.get("weekly_training_plan")
 
     is_health_flag = bool(re.search(r"pain|injury|chest pain|dizziness|faint|fracture", body.content, re.I))
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -173,6 +213,10 @@ async def send_chat_message(
             "content": reply_text,
             "timestamp": now_iso,
             "has_health_flag": is_health_flag,
+            "planned_session": planned_session,
+            "nutrition_plan": nutrition_plan,
+            "nutrition_schedule": nutrition_schedule,
+            "weekly_training_plan": weekly_training_plan,
         }
         # Note the .select() chained here to guarantee PostgREST returns representation
         return supabase.table("chat_messages").insert(ai_payload).select().execute()
@@ -199,4 +243,6 @@ async def send_chat_message(
         "planned_session": planned_session,
         "recommended_session": planned_session,
         "nutrition_plan": nutrition_plan,
+        "nutrition_schedule": nutrition_schedule,
+        "weekly_training_plan": weekly_training_plan,
     }

@@ -1,5 +1,9 @@
 import { createClient } from "@/lib/supabase/client";
-import type { RecommendedPlannedSession } from "@/app/(app)/dashboard/ai/types.ts";
+import type { PlannedSession } from "@/lib/training/types";
+import type {
+  RecommendedPlannedSession,
+  WeeklyTrainingDay,
+} from "@/app/(app)/dashboard/ai/types.ts";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
 
@@ -13,6 +17,14 @@ export interface ApiMessage {
   recommended_session?: RecommendedPlannedSession | null;
   workout_plan?: any;
   nutrition_plan?: any;
+  nutrition_schedule?: NutritionScheduleDay[] | null;
+  weekly_training_plan?: WeeklyTrainingDay[] | null;
+}
+
+export interface NutritionScheduleDay {
+  date: string;
+  activity: string;
+  targetCalories: number;
 }
 
 export interface ApiSession {
@@ -77,7 +89,11 @@ export const chatApi = {
     return res.json();
   },
 
-  async sendMessage(sessionId: string, content: string): Promise<ApiMessage> {
+  async sendMessage(
+    sessionId: string,
+    content: string,
+    trainingSchedule: PlannedSession[] = [],
+  ): Promise<ApiMessage> {
     console.log("[API] Preparing headers for sendMessage...");
     const headers = await getAuthHeaders();
     
@@ -87,7 +103,11 @@ export const chatApi = {
     const res = await fetch(targetUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify({ sender: "user", content }),
+      body: JSON.stringify({
+        sender: "user",
+        content,
+        training_schedule: trainingSchedule,
+      }),
     });
 
     console.log("[API] Response status:", res.status);
@@ -106,6 +126,11 @@ export const chatApi = {
       method: "DELETE",
       headers,
     });
-    if (!res.ok) throw new Error("Failed to delete chat session");
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(
+        body || `Failed to delete chat session (${res.status}).`,
+      );
+    }
   },
 };

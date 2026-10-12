@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SessionCreate(BaseModel):
@@ -18,6 +18,7 @@ class SessionResponse(BaseModel):
 
 class MessageCreate(BaseModel):
     content: str
+    training_schedule: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class MessageResponse(BaseModel):
@@ -33,6 +34,8 @@ class MessageResponse(BaseModel):
     recommended_session: Optional[Dict[str, Any]] = None
     workout_plan: Optional[Dict[str, Any]] = None
     nutrition_plan: Optional[Dict[str, Any]] = None
+    nutrition_schedule: Optional[List[Dict[str, Any]]] = None
+    weekly_training_plan: Optional[List[Dict[str, Any]]] = None
 
 
 class SessionDetailResponse(BaseModel):

@@ -2,15 +2,23 @@
 
 import React, { useState, useEffect } from "react";
 import { Sparkles, CheckCircle, AlertCircle } from "lucide-react";
-import { Message, RecommendedPlannedSession, NutritionPlan } from "./types";
+import {
+  Message,
+  RecommendedPlannedSession,
+  NutritionPlan,
+  WeeklyTrainingDay,
+} from "./types";
 import { ChatPanel } from "./_components/chat-panel";
 import { TelemetryPanel } from "./_components/telemetry-panel";
 import { SessionSidebar } from "./_components/session-sidebar";
 import { PlannedSessionModal } from "./_components/planned-session-modal";
 import { NutritionPlanModal } from "./_components/nutrition-plan-modal";
 import { chatApi, ApiSession, ApiMessage } from "@/app/api/chat";
+import type { NutritionScheduleDay } from "@/app/api/chat";
 import { trainingApi } from "@/lib/training/api";
 import type { AddSessionInput } from "@/lib/training/schemas";
+import { saveCalorieTargets } from "@/lib/nutrition";
+import { addDays, todayISO } from "@/lib/training/dates";
 
 export default function AIAssistancePage() {
   const [sessions, setSessions] = useState<ApiSession[]>([]);
@@ -28,6 +36,9 @@ export default function AIAssistancePage() {
   const [plannedSessionModalOpen, setPlannedSessionModalOpen] = useState(false);
   const [nutritionModalOpen, setNutritionModalOpen] = useState(false);
   const [isSavingPlannedSession, setIsSavingPlannedSession] = useState(false);
+  const [savingNutritionMessageId, setSavingNutritionMessageId] = useState<
+    string | null
+  >(null);
 
   // Active planned session
   const [activePlannedSession, setActivePlannedSession] =
@@ -112,6 +123,8 @@ export default function AIAssistancePage() {
             plannedSession,
             hasNutritionPlan: Boolean(raw.nutrition_plan),
             nutritionPlan: raw.nutrition_plan || null,
+            nutritionSchedule: raw.nutrition_schedule || null,
+            weeklyTrainingPlan: raw.weekly_training_plan || null,
           };
         },
       );
@@ -199,12 +212,49 @@ export default function AIAssistancePage() {
         setSessionId(activeSessionId);
       }
 
-      const aiReply = await chatApi.sendMessage(activeSessionId, promptText);
+      const schedule = await trainingApi.getSchedule(
+        todayISO(),
+        addDays(todayISO(), 6),
+      );
+      const aiReply = await chatApi.sendMessage(
+        activeSessionId,
+        promptText,
+        schedule.sessions,
+      );
       const rawReply = aiReply as any;
+      const asksForWeeklyPlan =
+        /plan (a )?(week|7-day|seven-day)|week'?s worth|weekly (training|workout|schedule|plan)|7-day (training|workout|schedule|plan)|seven-day (training|workout|schedule|plan)/i.test(
+          promptText,
+        );
 
       const receivedSession: RecommendedPlannedSession | null =
         rawReply.planned_session || rawReply.recommended_session || null;
       const receivedNutrition = rawReply.nutrition_plan || null;
+      const receivedWeeklyPlan: WeeklyTrainingDay[] | null =
+        rawReply.weekly_training_plan ||
+        (asksForWeeklyPlan
+          ? Array.from({ length: 7 }, (_, offset) => {
+              const date = addDays(todayISO(), offset);
+              const planned = schedule.sessions.find(
+                (session) => session.date === date,
+              );
+              return planned
+                ? {
+                    date,
+                    activity_type: planned.activityType,
+                    target_duration_min: planned.targetDurationMin,
+                    intensity_band: planned.intensityBand,
+                    target_volume: planned.targetVolume,
+                  }
+                : {
+                    date,
+                    activity_type: "rest",
+                    target_duration_min: null,
+                    intensity_band: null,
+                    target_volume: null,
+                  };
+            })
+          : null);
 
       if (receivedSession) setActivePlannedSession(receivedSession);
       if (receivedNutrition) setNutritionPlan(receivedNutrition);
@@ -221,6 +271,8 @@ export default function AIAssistancePage() {
         plannedSession: receivedSession,
         hasNutritionPlan: Boolean(receivedNutrition),
         nutritionPlan: receivedNutrition,
+        nutritionSchedule: rawReply.nutrition_schedule || null,
+        weeklyTrainingPlan: receivedWeeklyPlan,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -244,6 +296,32 @@ export default function AIAssistancePage() {
       ]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleSaveNutritionSchedule = async (
+    schedule: NutritionScheduleDay[],
+    messageId: string,
+  ) => {
+    if (savingNutritionMessageId) return;
+    setSavingNutritionMessageId(messageId);
+    try {
+      await saveCalorieTargets(
+        schedule.map(({ date, targetCalories }) => ({
+          date,
+          target_calories: targetCalories,
+        })),
+      );
+      showNotice("Daily calorie targets added to your nutritional plan.");
+    } catch (error: unknown) {
+      showNotice(
+        error instanceof Error
+          ? error.message
+          : "Could not save your calorie targets.",
+        true,
+      );
+    } finally {
+      setSavingNutritionMessageId(null);
     }
   };
 
@@ -277,7 +355,9 @@ export default function AIAssistancePage() {
       );
     } catch (error: unknown) {
       const message =
-        error instanceof Error ? error.message : "Failed to save the planned session.";
+        error instanceof Error
+          ? error.message
+          : "Failed to save the planned session.";
       showNotice(message, true);
     } finally {
       setIsSavingPlannedSession(false);
@@ -354,6 +434,8 @@ export default function AIAssistancePage() {
             onSend={handleSendMessage}
             onOpenPlannedSessionModal={handleOpenPlannedSessionModal}
             onOpenNutritionModal={handleOpenNutritionModal}
+            onSaveNutritionSchedule={handleSaveNutritionSchedule}
+            savingNutritionMessageId={savingNutritionMessageId}
           />
         </div>
 
