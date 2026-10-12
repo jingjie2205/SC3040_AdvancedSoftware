@@ -18,6 +18,7 @@ import { TRAINING_RULES as R } from "@/lib/training/config";
 import { addDays, formatDay, formatShortDate } from "@/lib/training/dates";
 import { fieldErrorsFrom, generatePlanSchema, numberFromInput } from "@/lib/training/schemas";
 import type { Goal, Schedule, TrainingPlan, TrainingPreferences } from "@/lib/training/types";
+import { ForecastCard } from "./forecast-card";
 import {
   ConfirmDialog,
   ErrorBox,
@@ -208,7 +209,7 @@ export function PlanPanel({
             </h3>
             <p className="text-xs text-slate-400">
               {plan
-                ? `${formatDay(plan.startDate)} to ${formatDay(plan.endDate)} · ${plan.weeks} weeks · baseline ${plan.baselineVolume} pts/week`
+                ? `${formatDay(plan.startDate)} to ${formatDay(plan.endDate)} · ${plan.weeks} weeks · baseline ${plan.baselineVolume} pts/week${plan.progressionPct !== null ? ` · +${plan.progressionPct.toFixed(1)}% a week` : ""}`
                 : "Built from your preferences, your profile goal and activity level, and the last 4 weeks of completed training."}
             </p>
             {plan && <GoalNote goal={plan.goal} />}
@@ -286,6 +287,8 @@ export function PlanPanel({
           </p>
         )}
       </div>
+
+      <ForecastCard plan={plan} refreshKey={refreshKey} />
 
       {plan && (
         <div className="flex gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-200">

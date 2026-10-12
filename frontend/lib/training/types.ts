@@ -49,6 +49,11 @@ export interface TrainingPlan {
   /** The profile goal when the plan was generated or last adapted, or null if the profile had none. */
   goal: Goal | null;
   lastAdaptation: PlanAdaptation | null;
+  /**
+   * The weekly load increase, in percent, this plan was built with: learned from the athlete's own history (see
+   * ForecastView). Null for a plan made before that existed or on a database that can't keep it: the standard rate then.
+   */
+  progressionPct: number | null;
 }
 
 export interface PlannedSession {
@@ -188,4 +193,65 @@ export interface CoachMessage {
   cached: boolean;
   /** The not-medical-advice notice to show with it. */
   notice: string;
+}
+
+/** One week of the athlete's completed load (pts), the Monday it starts on. */
+export interface ForecastWeek {
+  weekStart: string;
+  load: number;
+}
+
+/** A week ahead: the forecast and the 80% band around it. */
+export interface ForecastAhead {
+  weekStart: string;
+  value: number;
+  low: number;
+  high: number;
+}
+
+/** One line of the plain-language account of how the weekly progression was set. */
+export interface ForecastStep {
+  key: string;
+  label: string;
+  detail: string;
+}
+
+/** How the forecast did on the athlete's own earlier weeks, against two plain alternatives (mean absolute error, pts). */
+export interface ForecastBacktest {
+  folds: number;
+  modelMae: number;
+  lastWeekMae: number;
+  averageMae: number;
+  /** How much of its usual say the athlete's own trend keeps in the progression because of this record, 0 to 1. */
+  trust: number;
+}
+
+/**
+ * The athlete's weekly load, the forecast fitted to it and the weekly progression it supports, from
+ * GET /api/v1/training/plan/forecast. Their own completed training only: Strava logs never count and no readiness
+ * data is involved.
+ */
+export interface ForecastView {
+  /** "holt" once there is enough history to fit the athlete's own trend, otherwise "default" (the standard rate). */
+  method: "holt" | "default";
+  weeksOfHistory: number;
+  weeksNeeded: number;
+  history: ForecastWeek[];
+  /** The model's one-week-ahead prediction for each week after the first. */
+  fitted: ForecastWeek[];
+  ahead: ForecastAhead[];
+  level: number | null;
+  trendPct: number | null;
+  alpha: number | null;
+  beta: number | null;
+  adherence: number | null;
+  acwr: number | null;
+  standardPct: number;
+  /** What the forecast supports as of today. */
+  progressionPct: number;
+  capPct: number;
+  /** What the active plan was built with, if it recorded one. */
+  planProgressionPct: number | null;
+  backtest: ForecastBacktest | null;
+  steps: ForecastStep[];
 }

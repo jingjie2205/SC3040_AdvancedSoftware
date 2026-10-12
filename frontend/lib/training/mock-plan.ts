@@ -70,14 +70,21 @@ export interface WeekTarget {
 }
 
 /** `weekOffset` keeps the deload rhythm aligned when only the remaining weeks are regenerated. */
-export function weeklyTargets(baseline: number, weeks: number, weekOffset = 0): WeekTarget[] {
+export function weeklyTargets(
+  baseline: number,
+  weeks: number,
+  weekOffset = 0,
+  progressionPct: number | null = null,
+): WeekTarget[] {
+  // The weekly increase learned from the athlete's own history (forecast.ts), or the standard one without it.
+  const step = progressionPct ?? R.weeklyProgressionPct;
   const targets: WeekTarget[] = [];
   let loading = baseline;
   for (let w = 0; w < weeks; w++) {
     if ((w + weekOffset + 1) % R.deloadEveryNWeeks === 0) {
       targets.push({ volume: Math.round(loading * R.deloadVolumeFactor), deload: true });
     } else {
-      if (w > 0) loading *= 1 + R.weeklyProgressionPct / 100;
+      if (w > 0) loading *= 1 + step / 100;
       targets.push({ volume: Math.round(loading), deload: false });
     }
   }
@@ -174,7 +181,7 @@ export function planWeekTarget(plan: TrainingPlan, weekMonday: string): number |
     ? Math.max(0, Math.floor(diffDays(startOfWeek(plan.lastAdaptation.adaptedOn), plan.startDate) / 7))
     : 0;
   if (index < elapsed) return null;
-  return weeklyTargets(plan.baselineVolume, plan.weeks - elapsed, elapsed)[index - elapsed].volume;
+  return weeklyTargets(plan.baselineVolume, plan.weeks - elapsed, elapsed, plan.progressionPct)[index - elapsed].volume;
 }
 
 /** What a session counts for when a week's load is shared out: intensity times length. */

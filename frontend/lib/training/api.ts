@@ -19,6 +19,7 @@ import type {
 import type {
   ActivityType,
   CoachMessage,
+  ForecastView,
   ModelInfo,
   PlannedSession,
   Schedule,
@@ -94,6 +95,11 @@ export interface TrainingApi {
   acknowledgeAdaptation(): Promise<void>;
 
   getSchedule(from: string, to: string): Promise<Schedule>;
+  /**
+   * The athlete's own weekly load, the forecast fitted to it and the weekly progression it supports. A read.
+   * Strava logs never count and no readiness data is involved.
+   */
+  getForecast(): Promise<ForecastView>;
   rescheduleSession(id: string, newDate: string): Promise<ApiResult<PlannedSession>>;
   removeSession(id: string): Promise<ApiResult<RemoveResult>>;
   /**

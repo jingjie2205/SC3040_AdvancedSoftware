@@ -17,6 +17,7 @@ import type {
 } from "./api";
 import type {
   CoachMessage,
+  ForecastView,
   ModelInfo,
   PlannedSession,
   Schedule,
@@ -151,6 +152,7 @@ export const httpTrainingApi: TrainingApi = {
   },
 
   getSchedule: (from, to) => read<Schedule>(`/schedule?from=${from}&to=${to}`),
+  getForecast: () => read<ForecastView>("/plan/forecast"),
   rescheduleSession: (id, newDate) =>
     request<PlannedSession>("PATCH", sessionPath(id), { date: newDate }),
   removeSession: (id) => request<RemoveResult>("DELETE", sessionPath(id)),
