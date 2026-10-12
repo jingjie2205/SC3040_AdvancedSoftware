@@ -2,20 +2,20 @@
 
 import React from "react";
 import { X, Calendar, Clock, CheckCircle2 } from "lucide-react";
-import { RecommendedPlannedSession, ActivityType, IntensityBand, SessionStatus } from "../types";
+import { RecommendedPlannedSession, ActivityType, IntensityBand } from "../types";
+import type { AddSessionInput } from "@/lib/training/schemas";
 
 interface PlannedSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
   session: RecommendedPlannedSession;
   setSession: React.Dispatch<React.SetStateAction<RecommendedPlannedSession>>;
-  onSave: () => void;
+  onSave: (input: AddSessionInput) => void;
   isSaving?: boolean;
 }
 
 const ACTIVITIES: ActivityType[] = ["run", "cycling", "gym", "bodyweight"];
 const BANDS: IntensityBand[] = ["light", "push", "deload"];
-const STATUSES: SessionStatus[] = ["planned", "completed", "skipped"];
 
 export function PlannedSessionModal({
   isOpen,
@@ -64,7 +64,7 @@ export function PlannedSessionModal({
             </div>
 
             <div>
-              <label className="block font-medium text-slate-400 mb-1">Activity Type</label>
+              <label className="block font-medium text-slate-400 mb-1">Activity</label>
               <select
                 value={session.activity_type}
                 onChange={(e) =>
@@ -84,10 +84,10 @@ export function PlannedSessionModal({
             </div>
           </div>
 
-          {/* Duration & Intensity Band */}
+          {/* Duration & Intensity */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block font-medium text-slate-400 mb-1">Duration (min)</label>
+              <label className="block font-medium text-slate-400 mb-1">Length (min)</label>
               <div className="relative">
                 <input
                   type="number"
@@ -128,42 +128,11 @@ export function PlannedSessionModal({
             </div>
           </div>
 
-          {/* Target Volume & Status */}
-          <div className="grid grid-cols-2 gap-3">
+          <div>
             <div>
-              <label className="block font-medium text-slate-400 mb-1">Target Volume</label>
-              <input
-                type="number"
-                placeholder="Auto"
-                value={session.target_volume ?? ""}
-                onChange={(e) =>
-                  setSession((prev) => ({
-                    ...prev,
-                    target_volume: e.target.value === "" ? null : Number(e.target.value),
-                  }))
-                }
-                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-500"
-              />
-            </div>
-
-            <div>
-              <label className="block font-medium text-slate-400 mb-1">Status</label>
-              <select
-                value={session.status || "planned"}
-                onChange={(e) =>
-                  setSession((prev) => ({
-                    ...prev,
-                    status: e.target.value as SessionStatus,
-                  }))
-                }
-                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white capitalize focus:outline-none focus:border-emerald-500"
-              >
-                {STATUSES.map((st) => (
-                  <option key={st} value={st} className="capitalize">
-                    {st}
-                  </option>
-                ))}
-              </select>
+              <p className="text-[11px] text-slate-400">
+                The session will be added as planned. Its target volume is calculated by the training plan.
+              </p>
             </div>
           </div>
         </div>
@@ -179,7 +148,14 @@ export function PlannedSessionModal({
           </button>
           <button
             type="button"
-            onClick={onSave}
+            onClick={() =>
+              onSave({
+                date: session.date,
+                activityType: session.activity_type,
+                intensityBand: session.intensity_band,
+                targetDurationMin: session.target_duration_min,
+              })
+            }
             disabled={isSaving}
             className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-semibold rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
           >

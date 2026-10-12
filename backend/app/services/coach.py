@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
-from .config import get_settings
+from ..commons.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +156,14 @@ Prescribe a scientifically rigorous recommendation optimizing for adaptation whi
             return response.parsed  # type: ignore
 
         if response.text:
-            data = json.loads(response.text)
-            return RecommendationSchema.model_validate(data)
+            try:
+                data = json.loads(response.text)
+                return RecommendationSchema.model_validate(data)
+            except json.JSONDecodeError:
+                logger.error(
+                    f"Failed to decode Gemini JSON response: {response.text}",
+                    exc_info=True,
+                )
 
         return _get_mock_recommendation(acwr, acute_load, chronic_load)
     except Exception as e:

@@ -10,6 +10,7 @@ import { PlannedSessionModal } from "./_components/planned-session-modal";
 import { NutritionPlanModal } from "./_components/nutrition-plan-modal";
 import { chatApi, ApiSession, ApiMessage } from "@/app/api/chat";
 import { trainingApi } from "@/lib/training/api";
+import type { AddSessionInput } from "@/lib/training/schemas";
 
 export default function AIAssistancePage() {
   const [sessions, setSessions] = useState<ApiSession[]>([]);
@@ -18,7 +19,10 @@ export default function AIAssistancePage() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSwitchingSession, setIsSwitchingSession] = useState(false);
-  const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
+  const [notice, setNotice] = useState<{
+    text: string;
+    error?: boolean;
+  } | null>(null);
 
   // Modal dialog states
   const [plannedSessionModalOpen, setPlannedSessionModalOpen] = useState(false);
@@ -26,14 +30,15 @@ export default function AIAssistancePage() {
   const [isSavingPlannedSession, setIsSavingPlannedSession] = useState(false);
 
   // Active planned session
-  const [activePlannedSession, setActivePlannedSession] = useState<RecommendedPlannedSession>({
-    date: new Date().toISOString().split("T")[0],
-    activity_type: "run",
-    target_duration_min: 45,
-    intensity_band: "light",
-    target_volume: null,
-    status: "planned",
-  });
+  const [activePlannedSession, setActivePlannedSession] =
+    useState<RecommendedPlannedSession>({
+      date: new Date().toISOString().split("T")[0],
+      activity_type: "run",
+      target_duration_min: 45,
+      intensity_band: "light",
+      target_volume: null,
+      status: "planned",
+    });
 
   const [nutritionPlan, setNutritionPlan] = useState<NutritionPlan>({
     title: "",
@@ -89,29 +94,34 @@ export default function AIAssistancePage() {
       setIsSwitchingSession(true);
       const detail = await chatApi.getSessionHistory(targetSessionId);
 
-      const parsedMessages: Message[] = (detail.messages || []).map((m: ApiMessage) => {
-        const raw = m as any;
-        const plannedSession: RecommendedPlannedSession | null =
-          raw.planned_session || raw.recommended_session || null;
+      const parsedMessages: Message[] = (detail.messages || []).map(
+        (m: ApiMessage) => {
+          const raw = m as any;
+          const plannedSession: RecommendedPlannedSession | null =
+            raw.planned_session || raw.recommended_session || null;
 
-        return {
-          id: m.message_id,
-          role: m.sender as "user" | "assistant",
-          content: m.content,
-          timestamp: new Date(m.timestamp).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
-          hasPlannedSession: Boolean(plannedSession),
-          plannedSession,
-          hasNutritionPlan: Boolean(raw.nutrition_plan),
-          nutritionPlan: raw.nutrition_plan || null,
-        };
-      });
+          return {
+            id: m.message_id,
+            role: m.sender as "user" | "assistant",
+            content: m.content,
+            timestamp: new Date(m.timestamp).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            }),
+            hasPlannedSession: Boolean(plannedSession),
+            plannedSession,
+            hasNutritionPlan: Boolean(raw.nutrition_plan),
+            nutritionPlan: raw.nutrition_plan || null,
+          };
+        },
+      );
 
       setMessages(parsedMessages);
     } catch (err) {
-      console.error(`Failed to load history for session ${targetSessionId}:`, err);
+      console.error(
+        `Failed to load history for session ${targetSessionId}:`,
+        err,
+      );
     } finally {
       setIsSwitchingSession(false);
     }
@@ -141,7 +151,9 @@ export default function AIAssistancePage() {
   const handleDeleteSession = async (targetSessionId: string) => {
     try {
       await chatApi.deleteSession(targetSessionId);
-      const remaining = sessions.filter((s) => s.session_id !== targetSessionId);
+      const remaining = sessions.filter(
+        (s) => s.session_id !== targetSessionId,
+      );
       setSessions(remaining);
 
       if (sessionId === targetSessionId) {
@@ -169,7 +181,10 @@ export default function AIAssistancePage() {
       id: tempUserId,
       role: "user",
       content: promptText,
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      timestamp: new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
     };
 
     setMessages((prev) => [...prev, userMessage]);
@@ -211,14 +226,20 @@ export default function AIAssistancePage() {
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (err: unknown) {
       console.error("Chat flow error:", err);
-      const errorText = err instanceof Error ? err.message : "Failed to communicate with AI core.";
+      const errorText =
+        err instanceof Error
+          ? err.message
+          : "Failed to communicate with AI core.";
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           role: "assistant",
           content: `Error: ${errorText}`,
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          timestamp: new Date().toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
         },
       ]);
     } finally {
@@ -226,7 +247,9 @@ export default function AIAssistancePage() {
     }
   };
 
-  const handleOpenPlannedSessionModal = (session?: RecommendedPlannedSession | null) => {
+  const handleOpenPlannedSessionModal = (
+    session?: RecommendedPlannedSession | null,
+  ) => {
     if (session) setActivePlannedSession(session);
     setPlannedSessionModalOpen(true);
   };
@@ -236,34 +259,26 @@ export default function AIAssistancePage() {
     setNutritionModalOpen(true);
   };
 
-  // Persist session (backend automatically binds user's training routine plan)
-  const handleSavePlannedSession = async () => {
+  const handleSavePlannedSession = async (input: AddSessionInput) => {
+    setIsSavingPlannedSession(true);
     try {
-      setIsSavingPlannedSession(true);
-
-      const res = await trainingApi.addPlannedSession({
-        date: activePlannedSession.date,
-        activity_type: activePlannedSession.activity_type,
-        target_duration_min: Number(activePlannedSession.target_duration_min),
-        intensity_band: activePlannedSession.intensity_band,
-        target_volume:
-          activePlannedSession.target_volume !== null && activePlannedSession.target_volume !== undefined
-            ? Number(activePlannedSession.target_volume)
-            : null,
-        status: activePlannedSession.status || "planned",
-      });
-
-      if (res.ok) {
-        setPlannedSessionModalOpen(false);
-        showNotice(
-          `Added ${activePlannedSession.activity_type} (${activePlannedSession.intensity_band}) on ${activePlannedSession.date} to schedule!`
-        );
-      } else {
-        showNotice(res.error?.message || "Failed to schedule session.", true);
+      const result = await trainingApi.addSession(input);
+      if (!result.ok) {
+        showNotice(result.error.message, true);
+        return;
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Error saving planned session.";
-      showNotice(msg, true);
+
+      setPlannedSessionModalOpen(false);
+      const { adjustedCount } = result.data;
+      showNotice(
+        adjustedCount > 0
+          ? `Session added to your schedule. ${adjustedCount} other session${adjustedCount === 1 ? " was" : "s were"} adjusted.`
+          : "Session added to your schedule.",
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Failed to save the planned session.";
+      showNotice(message, true);
     } finally {
       setIsSavingPlannedSession(false);
     }
@@ -271,7 +286,9 @@ export default function AIAssistancePage() {
 
   const handleSaveNutrition = () => {
     setNutritionModalOpen(false);
-    showNotice(`Saved "${nutritionPlan.title || "Nutrition Plan"}" to Nutrition records!`);
+    showNotice(
+      `Saved "${nutritionPlan.title || "Nutrition Plan"}" to Nutrition records!`,
+    );
   };
 
   return (
@@ -285,7 +302,11 @@ export default function AIAssistancePage() {
               : "bg-emerald-950/90 border-emerald-500/50 text-emerald-300"
           }`}
         >
-          {notice.error ? <AlertCircle className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}
+          {notice.error ? (
+            <AlertCircle className="w-5 h-5" />
+          ) : (
+            <CheckCircle className="w-5 h-5" />
+          )}
           <span className="text-sm font-medium">{notice.text}</span>
         </div>
       )}
@@ -297,13 +318,15 @@ export default function AIAssistancePage() {
             AI Assistance <Sparkles className="w-6 h-6 text-emerald-400" />
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Endurance telemetry intelligence, customized training protocols, and schedule recommendations.
+            Endurance telemetry intelligence, customized training protocols, and
+            schedule recommendations.
           </p>
         </div>
 
         <div className="hidden sm:flex items-center gap-2 bg-[#0B1220] border border-slate-800/80 px-3.5 py-1.5 rounded-full text-xs text-slate-300">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          Active Session: {sessionId ? `${sessionId.slice(0, 8)}...` : "Connecting..."}
+          Active Session:{" "}
+          {sessionId ? `${sessionId.slice(0, 8)}...` : "Connecting..."}
         </div>
       </div>
 
@@ -337,7 +360,9 @@ export default function AIAssistancePage() {
         {/* Right Column: Telemetry & Biometrics */}
         <div className="lg:col-span-3">
           <TelemetryPanel
-            onOpenWorkoutModal={() => handleOpenPlannedSessionModal(activePlannedSession)}
+            onOpenWorkoutModal={() =>
+              handleOpenPlannedSessionModal(activePlannedSession)
+            }
             onOpenNutritionModal={() => handleOpenNutritionModal(nutritionPlan)}
           />
         </div>
