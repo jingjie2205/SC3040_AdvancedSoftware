@@ -98,6 +98,10 @@ class TrainingPlan(ApiModel):
     # The profile goal this plan was built for, as it stood when it was generated or last adapted.
     goal: Optional[Goal] = None
     last_adaptation: Optional[PlanAdaptation] = None
+    # The weekly load increase (percent) this plan was built with, learned from the athlete's own history (see
+    # forecast.py). None for a plan built before that existed, or on a database that can't store it: the standard
+    # `config.weekly_progression_pct` then applies.
+    progression_pct: Optional[float] = None
 
 
 class PlannedSession(ApiModel):
@@ -242,6 +246,61 @@ class CoachMessage(ApiModel):
 
 class RemoveResult(ApiModel):
     redistributed_count: int
+
+
+class ForecastWeek(ApiModel):
+    week_start: date
+    load: float
+
+
+class ForecastAhead(ApiModel):
+    week_start: date
+    value: float
+    low: float
+    high: float
+
+
+class ForecastStep(ApiModel):
+    key: str
+    label: str
+    detail: str
+
+
+class ForecastBacktest(ApiModel):
+    """How the forecast did on the athlete's own earlier weeks, against two plain alternatives. Mean absolute error, pts."""
+
+    folds: int
+    model_mae: float
+    last_week_mae: float
+    average_mae: float
+    # How much of its usual say the athlete's own trend keeps in the plan's progression because of this record, 0 to 1.
+    trust: float
+
+
+class ForecastView(ApiModel):
+    """
+    The athlete's weekly load, the forecast fitted to it, and how that sets the plan's weekly progression. Their own
+    completed training only: Strava logs never count, and no readiness data is involved.
+    """
+
+    method: Literal["holt", "default"]
+    weeks_of_history: int
+    weeks_needed: int
+    history: List[ForecastWeek]
+    fitted: List[ForecastWeek]  # the model's one-week-ahead prediction for each week after the first
+    ahead: List[ForecastAhead]
+    level: Optional[float] = None
+    trend_pct: Optional[float] = None
+    alpha: Optional[float] = None
+    beta: Optional[float] = None
+    adherence: Optional[float] = None
+    acwr: Optional[float] = None
+    standard_pct: float
+    progression_pct: float  # what the forecast supports as of today
+    cap_pct: float
+    plan_progression_pct: Optional[float] = None  # what the active plan was built with, if it recorded one
+    backtest: Optional[ForecastBacktest] = None
+    steps: List[ForecastStep]
 
 
 class AddSessionResult(ApiModel):

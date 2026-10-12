@@ -20,13 +20,23 @@ from .coach import (
     fallback_message,
     weekday_name,
 )
-from .config import COACH_RULES, PLAN_NOTICE, RULES, CoachRules, TrainingRules
+from .config import (
+    COACH_RULES,
+    FORECAST_RULES,
+    PLAN_NOTICE,
+    RULES,
+    CoachRules,
+    ForecastRules,
+    TrainingRules,
+)
 from .errors import TrainingError
+from .forecast import LoadForecast, build_forecast, fmt, forecast_view
 from .models import (
     ActivityType,
     AddSessionRequest,
     AddSessionResult,
     CoachMessage,
+    ForecastView,
     GeneratePlanRequest,
     IntensityBand,
     LogResult,
@@ -138,11 +148,13 @@ class TrainingService:
         *,
         coach: Optional[CoachClient] = None,
         coach_rules: CoachRules = COACH_RULES,
+        forecast_rules: ForecastRules = FORECAST_RULES,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.repo = repository
         self.scorer = scorer
         self.rules = rules
+        self.forecast_rules = forecast_rules
         self.coach = coach
         self.coach_rules = coach_rules
         self._clock = clock
@@ -194,8 +206,7 @@ class TrainingService:
         profile = self.repo.get_profile(user_id)
         goal = goal_for(profile, self.rules)
         baseline = self._baseline(user_id, today, profile)
-        targets = weekly_targets(baseline.volume, request.weeks, 0, self.rules)
-        self._require_safe(targets)
+        targets, progression = self._plan_targets(baseline.volume, request.weeks, 0, self._forecast(user_id, today))
 
         start = week_start(today)
         plan = TrainingPlan(
@@ -209,6 +220,7 @@ class TrainingService:
             notice=PLAN_NOTICE,
             goal=goal,
             last_adaptation=None,
+            progression_pct=progression,
         )
 
         # Only sessions still to do are dropped; completed, partial and missed ones are history.
@@ -744,6 +756,46 @@ class TrainingService:
             created_at=_now(),
         )
 
+    def _forecast(self, user_id: str, today: date) -> LoadForecast:
+        """
+        The athlete's load forecast as of `today`, from what they actually logged (Hard Rules 1 and 3: Strava rows never
+        count, and what was planned never stands in for what was done).
+        """
+        reach = max(self.forecast_rules.window_weeks, self.forecast_rules.adherence_window_weeks)
+        since = week_start(today) - timedelta(weeks=reach)
+        workouts = self.repo.list_workouts(user_id, since, today)
+        sessions = self.repo.list_sessions(user_id, since, week_start(today) - timedelta(days=1))
+        records = [ActivityRecord(w.date, w.actual_volume, w.avg_hr, w.source) for w in workouts]
+        acwr = build_features(records, None, today).acwr
+        return build_forecast(workouts, sessions, acwr, today, self.rules, self.forecast_rules)
+
+    def _plan_targets(
+        self, baseline: float, weeks: int, week_offset: int, forecast: LoadForecast
+    ) -> Tuple[List[WeekTarget], Optional[float]]:
+        """
+        The weekly targets for a plan, and the weekly progression they were built with (None when the database has no
+        place to keep one). The forecast's rate is used, but a plan the safety check would reject at that rate is built
+        at the standard one instead, and one the standard rate can't make safe is still refused.
+        """
+        if not self.repo.supports_plan_progression():
+            targets = weekly_targets(baseline, weeks, week_offset, self.rules)
+            self._require_safe(targets)
+            return targets, None
+        targets = weekly_targets(baseline, weeks, week_offset, self.rules, progression_pct=forecast.rate_pct)
+        if first_unsafe_week(targets, self.rules) == -1:
+            return targets, forecast.rate_pct
+        standard = self.rules.weekly_progression_pct
+        targets = weekly_targets(baseline, weeks, week_offset, self.rules, progression_pct=standard)
+        self._require_safe(targets)
+        return targets, standard
+
+    def get_forecast(self, user_id: str, today: date) -> ForecastView:
+        """The athlete's weekly load, the forecast fitted to it, and the progression it supports (a read, nothing changes)."""
+        plan = self.repo.get_active_plan(user_id)
+        return forecast_view(
+            self._forecast(user_id, today), plan.progression_pct if plan else None, self.rules, self.forecast_rules
+        )
+
     def _baseline(self, user_id: str, today: date, profile: Optional[AthleteProfile]) -> Baseline:
         window_start = week_start(today) - timedelta(weeks=self.rules.baseline_window_weeks)
         workouts = self.repo.list_workouts(user_id, window_start, today)
@@ -815,8 +867,8 @@ class TrainingService:
         monday = week_start(today)
         weeks_elapsed = max(0, (monday - plan.start_date).days // 7)
         remaining = plan.weeks - weeks_elapsed
-        targets = weekly_targets(baseline.volume, remaining, weeks_elapsed, self.rules)
-        self._require_safe(targets)
+        forecast = self._forecast(user_id, today)
+        targets, progression = self._plan_targets(baseline.volume, remaining, weeks_elapsed, forecast)
 
         upcoming = self.repo.list_sessions(user_id, today, plan.end_date)
         drop = [s.id for s in upcoming if s.plan_id == plan.id and s.status in MOVABLE_STATUSES]
@@ -836,14 +888,24 @@ class TrainingService:
                 f"Rebaselined from your {baseline.session_count} logged sessions in the last "
                 f"{weeks} weeks: {plan.baseline_volume:.0f} to {baseline.volume:.0f} pts/week."
             )
+        standard = self.rules.weekly_progression_pct
+        pace = (
+            f"Weekly progression is now {fmt(progression)}% instead of the standard {fmt(standard)}%: see the load "
+            "forecast on the Plan tab."
+            if progression is not None and progression != standard
+            else ""
+        )
         reason = " ".join(
-            part for part in (lead, rebase, f"Only the remaining {remaining} week(s) were regenerated.") if part
+            part
+            for part in (lead, rebase, f"Only the remaining {remaining} week(s) were regenerated.", pace)
+            if part
         )
 
         adapted = plan.model_copy(
             update={
                 "baseline_volume": baseline.volume,
                 "goal": goal,
+                "progression_pct": progression,
                 "last_adaptation": PlanAdaptation(
                     trigger=trigger,
                     reason=reason,

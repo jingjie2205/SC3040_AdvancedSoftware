@@ -108,12 +108,20 @@ class WeekTarget:
 
 
 def weekly_targets(
-    baseline: float, weeks: int, week_offset: int = 0, rules: TrainingRules = RULES
+    baseline: float,
+    weeks: int,
+    week_offset: int = 0,
+    rules: TrainingRules = RULES,
+    *,
+    progression_pct: Optional[float] = None,
 ) -> List[WeekTarget]:
     """
-    Periodised weekly volume: gentle progression with a deload every N weeks.
+    Periodised weekly volume: progression with a deload every N weeks.
     `week_offset` keeps the deload rhythm aligned when only the remaining weeks are regenerated.
+    `progression_pct` is the weekly increase learned from the athlete's own history (forecast.py); without it the
+    standard `config.weekly_progression_pct` applies.
     """
+    step = rules.weekly_progression_pct if progression_pct is None else progression_pct
     targets: List[WeekTarget] = []
     loading = baseline
     for week in range(weeks):
@@ -121,7 +129,7 @@ def weekly_targets(
             targets.append(WeekTarget(round_half_up(loading * rules.deload_volume_factor), True))
             continue
         if week > 0:
-            loading *= 1 + rules.weekly_progression_pct / 100
+            loading *= 1 + step / 100
         targets.append(WeekTarget(round_half_up(loading), False))
     return targets
 
@@ -266,7 +274,10 @@ def plan_week_target(plan: TrainingPlan, week_monday: date, rules: TrainingRules
         elapsed = max(0, (week_start(plan.last_adaptation.adapted_on) - plan.start_date).days // 7)
     if index < elapsed:
         return None
-    return weekly_targets(plan.baseline_volume, plan.weeks - elapsed, elapsed, rules)[index - elapsed].volume
+    targets = weekly_targets(
+        plan.baseline_volume, plan.weeks - elapsed, elapsed, rules, progression_pct=plan.progression_pct
+    )
+    return targets[index - elapsed].volume
 
 
 def weight_of(band: IntensityBand, duration_min: int, rules: TrainingRules = RULES) -> float:

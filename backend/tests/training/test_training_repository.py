@@ -269,6 +269,69 @@ def test_any_other_database_error_asking_about_calories_is_not_papered_over():
     assert _calls(client) == ["training_schema_features"]
 
 
+# ------------------------------------------------------------------ the weekly progression a plan is built with
+
+
+def _with_progression(value):
+    changes = _changes()
+    changes.upsert_plans = [changes.upsert_plans[0].model_copy(update={"progression_pct": value})]
+    return changes
+
+
+def test_a_plans_weekly_progression_travels_once_the_database_says_it_can_keep_it():
+    repo, client = repo_with()
+    client.features = {"calories": True, "progression": True}
+    repo.apply(USER_A, _with_progression(3.5))
+    assert _calls(client) == ["training_schema_features", "training_apply_changes"]
+    assert client.rpcs[1][1]["p_changes"]["upsert_plans"][0]["progression_pct"] == 3.5
+
+    plain_repo, plain_client = repo_with()
+    plain_repo.apply(USER_A, _with_progression(None))
+    assert _calls(plain_client) == ["training_apply_changes"], "a plan with no rate asks nothing extra"
+
+
+def test_the_database_is_asked_about_progression_until_it_has_said_yes_and_then_not_again():
+    repo, client = repo_with()
+    client.features = {"calories": True, "progression": True}
+    assert repo.supports_plan_progression() and repo.supports_plan_progression()
+    repo.apply(USER_A, _with_progression(2.0))
+    assert _calls(client).count("training_schema_features") == 1
+
+
+@pytest.mark.parametrize("code", ["PGRST202", "42883", "42703", "PGRST204", "PGRST205", "42P01"])
+def test_a_plans_progression_is_refused_not_dropped_on_a_database_that_cant_keep_it(code):
+    repo, client = repo_with()
+    client.error = APIError({"message": "could not find the function training_schema_features", "code": code,
+                             "hint": None, "details": None})
+    assert repo.supports_plan_progression() is False
+    with pytest.raises(TrainingError) as refused:
+        repo.apply(USER_A, _with_progression(3.5))
+    assert refused.value.code == "UNAVAILABLE" and "migration" in refused.value.message
+    assert "training_apply_changes" not in _calls(client), "nothing was written"
+    client.error = None
+    client.features = {"calories": True, "progression": True}  # the migration is applied later: no restart needed
+    repo.apply(USER_A, _with_progression(3.5))
+    assert _calls(client)[-1] == "training_apply_changes"
+
+
+@pytest.mark.parametrize("answer", [None, {}, {"calories": True}, {"progression": False}, {"progression": "yes"}, ["progression"], "ok"])
+def test_progression_is_not_assumed_unless_the_database_says_it_keeps_it(answer):
+    """Calories being kept says nothing about the rate: only the migration's own answer counts."""
+    repo, client = repo_with()
+    client.features = answer
+    assert repo.supports_plan_progression() is False
+    with pytest.raises(TrainingError):
+        repo.apply(USER_A, _with_progression(3.5))
+    assert "training_apply_changes" not in _calls(client)
+
+
+def test_any_other_database_error_asking_about_progression_is_not_papered_over():
+    repo, client = repo_with()
+    client.error = APIError({"message": "boom", "code": "XX000", "hint": None, "details": None})
+    with pytest.raises(APIError):
+        repo.supports_plan_progression()
+
+
 def test_an_empty_change_set_has_the_expected_empty_shape():
     payload = changes_payload(ChangeSet())
     assert payload == {"supersede_active_plan": False, "delete_session_ids": [], "upsert_plans": [],

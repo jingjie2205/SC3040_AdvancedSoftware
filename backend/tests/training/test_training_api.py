@@ -522,6 +522,73 @@ def test_the_new_route_carries_no_readiness(app):
     assert "readiness" not in reply and "score" not in reply
 
 
+# ------------------------------------------------------------------ the load forecast
+
+
+FORECAST = "/api/v1/training/plan/forecast"
+
+
+def onboard_with_weeks(client, repo, weeks: int, user: str = USER_A) -> None:
+    assert client.put("/api/v1/training/preferences", json=PREFS, headers=headers(user)).status_code == 200
+    seed_history(repo, user, TODAY - timedelta(days=TODAY.weekday()), weeks=weeks)
+
+
+def test_the_forecast_is_the_athletes_own_weekly_load_with_the_progression_it_supports(client, repo):
+    onboard_with_weeks(client, repo, 8)
+    response = client.get(FORECAST, headers=headers())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["method"] == "holt" and body["weeksOfHistory"] == 8 and body["weeksNeeded"] == 6
+    assert len(body["history"]) == 8 and len(body["fitted"]) == 7 and len(body["ahead"]) == 4
+    assert set(body["history"][0]) == {"weekStart", "load"} and set(body["ahead"][0]) == {"weekStart", "value", "low", "high"}
+    assert body["history"][0]["load"] == 99  # three 33-point sessions a week
+    assert body["standardPct"] == 5 and body["capPct"] == 8 and 0 <= body["progressionPct"] <= 8
+    assert body["steps"][0]["key"] == "history" and body["steps"][-1]["key"] == "rate"
+    assert body["backtest"]["folds"] == 4 and body["planProgressionPct"] is None  # no plan yet
+
+
+def test_with_too_little_history_it_says_so_instead_of_pretending(client, repo):
+    onboard(client, repo)  # four weeks
+    body = client.get(FORECAST, headers=headers()).json()
+    assert body["method"] == "default" and body["weeksOfHistory"] == 4 and body["progressionPct"] == 5
+    assert body["fitted"] == [] and body["ahead"] == [] and body["backtest"] is None and body["level"] is None
+    assert "needs 6" in body["steps"][0]["detail"]
+
+
+def test_the_plan_is_built_with_the_rate_the_forecast_shows_and_reports_it(client, repo):
+    onboard_with_weeks(client, repo, 8)
+    shown = client.get(FORECAST, headers=headers()).json()["progressionPct"]
+    plan = generate(client).json()
+    assert plan["progressionPct"] == shown
+    assert client.get("/api/v1/training/plan", headers=headers()).json()["progressionPct"] == shown
+    assert client.get(FORECAST, headers=headers()).json()["planProgressionPct"] == shown
+
+
+def test_a_strava_log_changes_nothing_in_the_forecast(client, repo):
+    onboard_with_weeks(client, repo, 8)
+    before = client.get(FORECAST, headers=headers()).json()
+    from training_fakes import workout
+
+    for n in range(40):
+        row = workout(TODAY - timedelta(days=8 + n * 3), volume=900, avg_hr=170, source="strava")
+        repo.workouts[row.id] = (USER_A, row)
+    assert client.get(FORECAST, headers=headers()).json() == before
+
+
+def test_the_forecast_needs_a_token_and_belongs_to_whoever_the_token_names(client, repo):
+    assert client.get(FORECAST).status_code in (401, 403)
+    assert client.get(FORECAST, headers={"Authorization": "Bearer forged-or-expired"}).status_code == 401
+    onboard_with_weeks(client, repo, 8)
+    theirs = client.get(FORECAST + "?userId=" + USER_A, headers=headers(USER_B)).json()
+    assert theirs["weeksOfHistory"] == 0 and theirs["history"] == [] and theirs["method"] == "default"
+
+
+def test_the_forecast_carries_no_readiness_and_no_other_persons_data(client, repo):
+    onboard_with_weeks(client, repo, 8)
+    text = client.get(FORECAST, headers=headers()).text.lower()
+    assert "readiness" not in text and "classification" not in text and USER_A not in text and USER_B not in text
+
+
 # ------------------------------------------------------------------ today and readiness
 
 
@@ -821,6 +888,7 @@ def test_responses_contain_every_field_the_frontend_types_declare(client, repo):
     schedule = client.get(f"/api/v1/training/schedule?from={TODAY}&to={TODAY + timedelta(days=6)}", headers=headers()).json()
     summary = client.get("/api/v1/training/summary", headers=headers()).json()
     coach = client.post("/api/v1/training/coach", headers=headers()).json()
+    forecast = client.get(FORECAST, headers=headers()).json()
 
     checks = {
         "TrainingPreferences": client.get("/api/v1/training/preferences", headers=headers()).json(),
@@ -838,6 +906,8 @@ def test_responses_contain_every_field_the_frontend_types_declare(client, repo):
         "WeekProgress": summary["week"],
         "NextSession": summary["nextSession"],
         "CoachMessage": coach,
+        "ForecastView": forecast,
+        "ForecastStep": forecast["steps"][0],
     }
     for name, payload in checks.items():
         missing = _interface_fields(name) - set(payload)

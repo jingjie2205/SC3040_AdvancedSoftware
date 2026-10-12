@@ -56,6 +56,7 @@ class FakeTrainingRepository:
         self.xp_calls: List[Tuple[str, str]] = []  # every call made, so a double call can't hide behind that
         self.xp_error: Optional[Exception] = None
         self.apply_calls = 0
+        self.progression_supported = True  # False behaves like a database the progression migration hasn't reached
 
     # ---------------------------------------------------------------- reads
 
@@ -124,6 +125,9 @@ class FakeTrainingRepository:
             deepcopy(s) for (owner, day), (s, _) in self.readiness.items()
             if owner == user_id and start <= day <= end
         ]
+
+    def supports_plan_progression(self) -> bool:
+        return self.progression_supported
 
     # ---------------------------------------------------------------- writes
 

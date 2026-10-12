@@ -15,6 +15,7 @@ from .models import (
     AddSessionRequest,
     AddSessionResult,
     CoachMessage,
+    ForecastView,
     GeneratePlanRequest,
     LogResult,
     LogWorkoutInput,
@@ -83,6 +84,15 @@ def get_plan(user_id: UserId, today: Today, service: Service):
 @router.post("/plan", response_model=TrainingPlan)
 def generate_plan(body: GeneratePlanRequest, user_id: UserId, today: Today, service: Service):
     return service.generate_plan(user_id, today, body)
+
+
+@router.get("/plan/forecast", response_model=ForecastView)
+def get_forecast(user_id: UserId, today: Today, service: Service):
+    """
+    The athlete's own weekly load, the forecast fitted to it, and the weekly progression it supports. A read: nothing
+    changes. Strava logs never count, and no readiness data is involved.
+    """
+    return service.get_forecast(user_id, today)
 
 
 @router.post("/plan/recalculate", response_model=TrainingPlan)

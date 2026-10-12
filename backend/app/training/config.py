@@ -5,7 +5,7 @@ nothing elsewhere in the package hard-codes a threshold.
 Volume is expressed in "load points" (roughly minutes weighted by intensity).
 """
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 PLAN_NOTICE = (
     "This plan is a general training guide, not medical advice. Stop and speak to a "
@@ -100,6 +100,51 @@ class TrainingRules:
 
 
 @dataclass(frozen=True)
+class ForecastRules:
+    """
+    The load forecast that sets how fast a plan progresses (forecast.py). Nothing in the forecast is a literal in code:
+    the fixed 5% a week (`TrainingRules.weekly_progression_pct`) is only the starting point it moves away from as the
+    athlete's own history says otherwise, and every number that shapes that is here.
+    """
+
+    # Whole weeks of logged training needed before the athlete's own trend is trusted. Below it the plan keeps the
+    # standard progression, because a trend fitted to a handful of points is mostly noise.
+    min_weeks: int = 6
+    # How far back the weekly series reaches.
+    window_weeks: int = 12
+    # Holt's damped-trend exponential smoothing. The smoothing parameters are not fixed: each athlete's pair is the one
+    # from these grids that forecast their own history best. `damping` (phi) fades a trend over the weeks ahead (1 never).
+    damping: float = 0.95
+    alpha_grid: Tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+    beta_grid: Tuple[float, ...] = (0.05, 0.1, 0.2, 0.3, 0.4, 0.5)
+    # How much history it takes for the athlete's own trend to count as much as the standard progression: the trend's
+    # weight is weeks / (weeks + prior_weeks), so with 6 weeks it has half the say and with 18 weeks three quarters.
+    prior_weeks: int = 6
+    # The progression it may choose, in percent a week. The top stays under `TrainingRules.max_weekly_increase_pct`
+    # (the plan check still rejects anything above that), and it never goes below holding the load.
+    rate_min_pct: float = 0.0
+    rate_max_pct: float = 8.0
+    # Progress only as far as the athlete completes the plan: over the last `adherence_window_weeks` whole weeks, the
+    # share of planned load actually done scales the rate from nothing at `adherence_low` to in full at `adherence_high`.
+    adherence_window_weeks: int = 4
+    adherence_low: float = 0.6
+    adherence_high: float = 0.9
+    # Walk-forward test of the forecast on the athlete's own history: it needs this many weeks to fit before the first
+    # prediction, and at least `backtest_min_folds` predictions before the result is shown.
+    backtest_min_train: int = 4
+    backtest_min_folds: int = 2
+    # How far the athlete's own trend is trusted, from that test. The better of two plain guesses ("the same as last
+    # week", "the average of the last four weeks") is the bar: the trend keeps its whole say while the forecast's average
+    # miss is within `trust_full_ratio` times the bar's, none of it once the miss is `trust_none_ratio` times the bar's or
+    # more, and a proportional share in between. What the trend loses goes back to the standard progression.
+    trust_full_ratio: float = 1.0
+    trust_none_ratio: float = 1.25
+    # What the chart shows: the weeks ahead, and the width of the band (1.28 standard deviations is an 80% interval).
+    horizon_weeks: int = 4
+    interval_z: float = 1.28
+
+
+@dataclass(frozen=True)
 class ReadinessRules:
     base_score: float = 80.0
     push_min_score: int = 70
@@ -160,5 +205,6 @@ class CoachRules:
 
 
 RULES = TrainingRules()
+FORECAST_RULES = ForecastRules()
 READINESS_RULES = ReadinessRules()
 COACH_RULES = CoachRules()

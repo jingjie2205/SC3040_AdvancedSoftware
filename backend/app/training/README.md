@@ -13,6 +13,7 @@ local date as `X-Client-Date: YYYY-MM-DD` so "today" matches theirs (the server 
 | GET / PUT | `/training/preferences` | T-1 read / save preferences, including optional upcoming exam dates |
 | GET | `/training/plan` | Active plan, or `null` |
 | POST | `/training/plan` | T-2 generate `{weeks, confirmReplace}`; replacing needs `confirmReplace: true` |
+| GET | `/training/plan/forecast` | The athlete's weekly completed load, the forecast fitted to it, how it did on their own earlier weeks, and the weekly progression a plan would use today, with the steps that led to it. A read, nothing changes. See "How fast a plan builds up" |
 | POST | `/training/plan/recalculate` | T-8 adapt from what was completed |
 | POST | `/training/plan/adaptation/acknowledge` | Dismiss the "your plan was adapted" notice |
 | GET | `/training/schedule?from=&to=` | T-6 sessions and workouts in a range (max 200 days) |
@@ -43,6 +44,7 @@ failures use the same shape (status 422), including request-body validation on t
 | `config.py` | Every tunable rule (thresholds, intervals, triggers). Change numbers here only |
 | `models.py` | Pydantic models, camelCase on the wire, no user id inside any of them |
 | `planner.py` | Baseline, periodisation, session placement, and the load a week carries when its sessions are planned by hand. Pure functions |
+| `forecast.py` | The load forecast behind a plan's weekly progression: the weekly series, Holt's damped-trend smoothing fitted per athlete, a walk-forward test of it, plan completion, the rate and the steps that explain it. Pure functions |
 | `rules.py` | Can a session move or be placed on a day? Which intensities a week allows. Readiness vs plan reconciliation. Pure functions |
 | `readiness.py` | Feature builder and the `ReadinessScorer` interface with the rule-based scorer |
 | `coach.py` | The AI coach: the fixed facts it may be given, the prompt, the Gemini client and the built-in fallback |
@@ -99,6 +101,13 @@ failures use the same shape (status 422), including request-body validation on t
      `training_schema_features()` is added, which the backend asks before it accepts calories (it answers
      `{"calories": true}` only once the write function keeps them, which the column alone doesn't prove). It **is safe
      to run again** and changes no existing row.
+   - `supabase/migrations/20261011300000_training_plan_progression.sql` lets a plan remember the weekly progression
+     it was built with: one nullable column, `training_routine_plans.progression_pct` (0 to 20, null meaning the
+     standard rate, which every earlier plan has), a range check, the write function `training_apply_changes`
+     replaced with the same body plus that column (a payload without it, from an older backend, leaves a stored
+     rate alone), and `training_schema_features()` extended to `{"calories": true, "progression": true}`. It **is
+     safe to run again**, changes no existing row and touches no other table. It was run against a throwaway
+     Postgres (PGlite) loaded with the earlier migrations, including a replay of the payloads the service sends.
 
    The backend copes with a database that hasn't had the second one yet (preferences save without exam
    dates, sleep reads as missing, plans save without a goal), but logging sleep or saving an exam date then
@@ -107,6 +116,9 @@ failures use the same shape (status 422), including request-body validation on t
    Apply the fourth before anyone saves Strava activities on a project that has the gamification trigger.
    Logging a workout **with** calories answers 503 ("Calories aren't set up on this database yet") until the fifth
    is applied, instead of saving the log and losing the number; a log without calories is never affected.
+   Until the sixth is applied, plans are built at the standard rate and store no rate (`progression_pct` stays null,
+   and the backend refuses to write one rather than lose it). `GET /training/plan/forecast` works either way: the
+   Plan tab shows what a plan would use today, and only compares it with the plan's own rate when the plan has one.
 3. **Check it landed.** In the SQL editor:
    ```sql
    select tablename, rowsecurity from pg_tables
@@ -155,9 +167,9 @@ harness isn't part of the repo.
 
 | Rule | Where | Test |
 |---|---|---|
-| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities`. The coach's week minutes go through `modelling_workouts` too. Activities saved from the page's Strava tab are `training_workout_logs` rows flagged `source = 'strava'`, never linked to a planned session and awarded no XP (the gamification trigger skips them, see the fourth migration); only `strava_sync.py` imports Strava code or writes such a row, and the tab's modules and the training API client never import each other. A property test saves 40 Strava logs and checks that the plan, readiness, summary and coach prompts come out identical | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model), `test_training_coach.py` and `test_training_summary.py` (a Strava row can't reach the prompt or the totals), `test_training_strava_isolation.py` (the behaviour above, and the imports), `test_training_strava_sync.py` |
+| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities`. The coach's week minutes go through `modelling_workouts` too, and so do the load forecast's weekly series and plan-completion share, so a Strava row can't move how fast a plan builds up. Activities saved from the page's Strava tab are `training_workout_logs` rows flagged `source = 'strava'`, never linked to a planned session and awarded no XP (the gamification trigger skips them, see the fourth migration); only `strava_sync.py` imports Strava code or writes such a row, and the tab's modules and the training API client never import each other. A property test saves 40 Strava logs and checks that the plan, readiness, summary and coach prompts come out identical | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model), `test_training_coach.py` and `test_training_summary.py` (a Strava row can't reach the prompt or the totals), `test_training_forecast.py` (a Strava log changes nothing in the forecast, the rate or plan completion), `test_training_strava_isolation.py` (the behaviour above, and the imports), `test_training_strava_sync.py` |
 | 2. Reconciliation is one-directional | `rules.reconcile` | `test_training_rules.py` (all nine band pairs) |
-| 3. Rebaseline on completed sessions | `planner.baseline_from_history` reads logged workouts only | `test_training_planner.py` |
+| 3. Rebaseline on completed sessions | `planner.baseline_from_history` reads logged workouts only. The load forecast does too: its weekly series is what was logged, and a session that came due and wasn't logged counts as not done in the completion share | `test_training_planner.py`, `test_training_forecast.py` |
 | 4. Readiness is private | Only the owner's own `GET /today` and `GET /summary`, and the stateless `/readiness/score`, can return it; selects are scoped to the user. The sleep entries and exam dates that feed it are held to the same rule: only the owner's own `GET /today` and `GET /preferences` return them. Nothing that feeds or comes from the score is ever given to Gemini: the coach's facts are built from the plan only, and readiness isn't even computed on its path | `test_training_api.py` walks the OpenAPI schema (exactly three operations carry readiness, and the coach isn't one); `test_training_repository.py`; `test_training_inputs.py`; `test_training_coach.py` (the exact prompt, forbidden words, an exploding scorer, an import guard) |
 | 5. Not-medical-advice notice | `config.PLAN_NOTICE`, stored on every plan | `test_training_service.py` |
 
@@ -200,6 +212,52 @@ harness isn't part of the repo.
     `test_training_rules.py`, `test_training_api.py`). The Python rules and their TypeScript copies in
     `frontend/lib/training/mock-plan.ts` and `rules.ts` were also run against each other on 13,000 random cases
     with no difference (the check isn't part of the repo), and the constants they share are pinned by a test.
+- **How fast a plan builds up is worked out from the athlete's own training, not a fixed 5%** (`forecast.py`,
+  `GET /training/plan/forecast`, the "Load forecast" card on the Plan tab). Plain Python, no new dependency. In order:
+  1. *The weekly load*: the points completed in each whole week before this one, up to `window_weeks` (12) back; a
+     week inside that stretch with nothing logged counts as zero. Strava rows never count (Hard Rule 1) and neither
+     does anything that was only planned (Rule 3).
+  2. *The trend*: Holt's damped-trend exponential smoothing gives the athlete's current weekly level and trend. Its
+     two smoothing constants are not fixed: for each athlete, the pair from `alpha_grid` x `beta_grid` that forecast
+     their own earlier weeks best is the one used. The trend, as a percent of the level, is their own rate of change.
+  3. *The track record*: a walk-forward test (fit on the weeks so far, predict the next, repeat) scores that forecast
+     on the athlete's own history against two plain guesses, "the same as last week" and "the average of the last
+     four weeks". The trend keeps its whole say if it did at least as well as the better guess (within
+     `trust_full_ratio`), none of it once its average miss is `trust_none_ratio` times the guess's or more, and a
+     proportional share in between. A noisy history usually earns it little or nothing, which is the point: the
+     forecast has to beat a plain guess on that athlete's data before it moves the plan.
+  4. *The blend*: trend and standard rate are mixed, the trend's weight being `weeks / (weeks + prior_weeks)` times
+     its track record. More weeks of data and a better record give it more of the say, and what it loses goes back
+     to the standard 5%.
+  5. *Plan completion and recent load*: the blend is scaled by the share of the planned load actually done over
+     the last `adherence_window_weeks` (4) whole weeks (nothing at 60% or less, in full at 90%), held at 0 while the
+     athlete's acute:chronic load ratio is above the readiness range (`READINESS_RULES.acwr_high`), and kept between
+     `rate_min_pct` and `rate_max_pct` (0% to 8%, under the plan's own 10% limit).
+  6. With fewer than `min_weeks` (6) whole weeks of the athlete's own training there is nothing to fit: the standard
+     rate stands, still scaled by completion and held by the load ratio.
+
+  The rate goes into `planner.weekly_targets` and is stored on the plan (`progression_pct`), so any week's target
+  (`planner.plan_week_target`, which the hand-planning rules use) is rebuilt from the same baseline and rate. The
+  plan's safety check is still the last word: a learned rate it would reject is replaced by the standard one, and if
+  that fails too no plan is saved. Adapting a plan uses today's forecast and says so in its reason when the rate
+  changed. The API returns the steps in plain words (history, trend, record, blend, completion, load, limits, rate),
+  which is what the card lists, along with the chart's weekly history, the model's one-week-ahead predictions, the
+  next four weeks with an 80% band, and the back-test numbers. Every number is in `config.ForecastRules`.
+  - *Private and safe:* the view is the owner's own and carries no readiness score, check-in or sleep, only the
+    acute:chronic load ratio. It reads logged workouts and planned sessions, nothing else.
+  - *Needs the sixth migration to be stored* (see "Turning it on"); the forecast itself needs nothing.
+  - *Tests:* `test_training_forecast.py` (the series, the smoothing against a hand-worked example, the back-test,
+    the track record, completion, the rate, the plan it ends up in, the API's fields against the frontend's types,
+    and the frontend's copy of the settings). 55 deliberate breakages of this code were each caught. Its TypeScript
+    copy `frontend/lib/training/forecast.ts` (the copy the fixtures run) was compared with the Python on 1,500
+    random histories (Strava logs included, some of them carrying a planned session's id), 675 of them again with the
+    load ratio set to land on the edges of its ranges, and 4,000 synthetic back-tests (view, wording and plan targets:
+    no difference; that check isn't part of the repo). 22 of 24 deliberate breakages of the copy were caught; the
+    other two can't show up in the fixtures (a guard that JavaScript's division by zero makes redundant, and a branch
+    the fixed settings never reach).
+  - *Limits, to say plainly:* it models one thing, the athlete's weekly load, so it can't know about injury, travel
+    or an exam week; it needs 6 whole weeks of the athlete's own logged training before it fits anything (accounts
+    with less show "n of 6 weeks" and get the standard rate); and it is a planning aid, not medical advice.
 - **The daily check-in feeds readiness.** The check-in rating is `daily_checkins.muscle_fatigue` from
   the gamification questionnaire ("How sore are your muscles?", 1 "Fresh" to 5 "Very sore", so higher
   is worse, the same direction as the score expects). Only that column and the date are read, only for the
