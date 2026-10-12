@@ -233,6 +233,9 @@ class TrainingService:
             ),
         )
         return plan
+    def get_user_plans(self, user_id: str):
+        # Fetch all routine plans for user ordered by creation
+        return self.repo.get_plans(user_id)
 
     def recalculate_plan(self, user_id: str, today: date) -> TrainingPlan:
         plan = self.repo.get_active_plan(user_id)

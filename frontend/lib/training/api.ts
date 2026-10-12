@@ -28,6 +28,7 @@ import type {
   TrainingPreferences,
   TrainingSummary,
   WorkoutSession,
+  IntensityBand
 } from "./types";
 
 export type ApiErrorCode =
@@ -116,6 +117,7 @@ export interface TrainingApi {
   respondToSession(id: string, response: SessionResponse): Promise<ApiResult<PlannedSession>>;
   logSession(id: string, input: LogWorkoutInput): Promise<ApiResult<LogResult>>;
   logAdHocSession(input: LogWorkoutInput): Promise<ApiResult<LogResult>>;
+  addPlannedSession(input: PlannedSessionInput): Promise<ApiResult<PlannedSession>>;
 }
 
 export const trainingApi: TrainingApi =

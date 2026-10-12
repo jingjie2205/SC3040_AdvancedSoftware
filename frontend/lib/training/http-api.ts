@@ -12,6 +12,7 @@ import type {
   ApiErrorCode,
   ApiResult,
   LogResult,
+  PlannedSessionInput,
   RemoveResult,
   TrainingApi,
 } from "./api";
@@ -151,6 +152,7 @@ export const httpTrainingApi: TrainingApi = {
   },
 
   getSchedule: (from, to) => read<Schedule>(`/schedule?from=${from}&to=${to}`),
+  addPlannedSession: (input) => request<PlannedSession>("POST", "/sessions/planned", input),
   rescheduleSession: (id, newDate) =>
     request<PlannedSession>("PATCH", sessionPath(id), { date: newDate }),
   removeSession: (id) => request<RemoveResult>("DELETE", sessionPath(id)),
