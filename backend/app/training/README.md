@@ -336,7 +336,7 @@ data, free text from the user, or any id, email or name. Adding to that list mea
 `test_training_coach.py` fails until the change is deliberate.
 
 - **Switching it on.** Put `GOOGLE_GENERATIVE_AI_API_KEY` in the backend's `.env`, the same variable the meal
-  analysis reads (the frontend's `.env.local` is not enough). The model is `gemini-2.5-flash`, set in
+  analysis reads (the frontend's `.env.local` is not enough). The model is `gemini-3.8-flash` (the one the team's shared Gemini client uses; `gemini-2.5-flash` is retired for new projects), set in
   `config.CoachRules` with its timeout, length and cost limits. Without a key the built-in message is used.
 - **If it keeps answering with the built-in text,** the backend log says why, as `The coach fell back to its
   built-in message: <kind> <status code> <status word>` (never Google's message text). `ClientError 404 NOT_FOUND`

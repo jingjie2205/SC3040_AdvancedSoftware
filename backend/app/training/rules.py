@@ -59,17 +59,15 @@ def _find_refusal(
 def _placement_refusal(
     session: PlannedSession, target: date, ctx: MoveContext, rules: TrainingRules
 ) -> Optional[Tuple[MoveRefusalCode, str]]:
-    """Whether `session` may sit on `target`: today or later, inside the plan, with no push beside a push."""
+    """Whether `session` may sit on `target`: today or later, inside the plan, on a free day, with no push beside a push."""
     if target < ctx.today:
         return "IN_PAST", "A session can't be on a day that has already passed."
     if target < ctx.plan_start or target > ctx.plan_end:
         return "OUT_OF_PLAN", "That date is outside your plan."
 
     others = [s for s in ctx.sessions if s.id != session.id]
-
-    # --- REMOVED / COMMENTED OUT TO ALLOW MULTIPLE SESSIONS ON THE SAME DAY ---
-    # if any(s.date == target for s in others):
-    #     return "DAY_OCCUPIED", "Another session is already on that day."
+    if any(s.date == target for s in others):
+        return "DAY_OCCUPIED", "Another session is already on that day."
 
     if session.intensity_band == rules.high_intensity_band:
         neighbours = {target - timedelta(days=1), target + timedelta(days=1)}

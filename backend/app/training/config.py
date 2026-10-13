@@ -194,7 +194,7 @@ class ReadinessRules:
 class CoachRules:
     """The AI coach (Gemini). See coach.py for what it may and may not be given."""
 
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.8-flash"
     timeout_s: float = 15.0
     max_output_tokens: int = 220
     temperature: float = 0.5

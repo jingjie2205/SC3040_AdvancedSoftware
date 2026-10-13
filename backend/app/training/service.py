@@ -345,25 +345,25 @@ class TrainingService:
             intensity_band=data.intensity_band,
             status="planned",
         )
-
         refusal = check_placement(draft, data.date, context, self.rules)
-        if refusal and refusal.code not in ("DAY_OCCUPIED", "NOT_A_FREE_DAY", "COLLISION", "DAY_TAKEN"):
+        if refusal:
             raise TrainingError(refusal.code, refusal.reason, suggested_date=refusal.suggested_date)
 
         week = self._plan_week(context, plan, monday)
         movable = [s for s in week if s.status in MOVABLE_STATUSES]
         pool = week_pool(
             target=plan_week_target(plan, monday, self.rules) or 0,
-            finished=sum(s.target_volume for s in week if s.status not in MOVABLE_STATUSES),
+            finished=sum(s.target_volume for s in week if s.status not in MOVABLE_STATUSES),  # done or missed
             now=sum(s.target_volume for s in movable),
             sessions_after=len(movable) + 1,
-            per_week=sessions_per_week(preferences) + 1,  # allow extra slot in the week
+            per_week=sessions_per_week(preferences),
         )
         if pool < len(movable) + 1:
-            share_volume = max(10, int(duration * 0.8))
-            added = draft.model_copy(update={"target_volume": share_volume})
-            self.repo.apply(user_id, ChangeSet(upsert_sessions=[added]))
-            return AddSessionResult(session=added, adjusted_count=0)
+            raise TrainingError(
+                "WEEK_FULL",
+                "That week's training load is already planned or done, so there's nothing left to share with "
+                "another session. Pick another week, or log it as an extra workout once you've done it.",
+            )
 
         share = share_week(pool, self._weights(movable), weight_of(data.intensity_band, duration, self.rules))
         added = draft.model_copy(update={"target_volume": share.new_volume})
