@@ -40,7 +40,7 @@ export type SessionDialogTarget =
 const FIELDS = ["date", "activityType", "intensityBand", "targetDurationMin"];
 
 /** The refusals that are about the day, which come with the nearest day that would work. */
-const DAY_CODES = new Set(["IN_PAST", "OUT_OF_PLAN", "DAY_OCCUPIED", "CONSECUTIVE_HIGH_INTENSITY"]);
+const DAY_CODES = new Set(["IN_PAST", "OUT_OF_PLAN", "CONSECUTIVE_HIGH_INTENSITY"]);
 
 const BAND_NOTE: Record<IntensityBand, string> = {
   push: "A hard session. It can't be the day before or after another push.",

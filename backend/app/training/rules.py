@@ -20,7 +20,6 @@ MoveRefusalCode = Literal[
     "NO_CHANGE",
     "IN_PAST",
     "OUT_OF_PLAN",
-    "DAY_OCCUPIED",
     "CONSECUTIVE_HIGH_INTENSITY",
 ]
 
@@ -59,18 +58,19 @@ def _find_refusal(
 def _placement_refusal(
     session: PlannedSession, target: date, ctx: MoveContext, rules: TrainingRules
 ) -> Optional[Tuple[MoveRefusalCode, str]]:
-    """Whether `session` may sit on `target`: today or later, inside the plan, on a free day, with no push beside a push."""
+    """
+    Whether `session` may sit on `target`: today or later, inside the plan, and with no push on the same day as another
+    push or the day before or after one. Any number of other sessions may share the day.
+    """
     if target < ctx.today:
         return "IN_PAST", "A session can't be on a day that has already passed."
     if target < ctx.plan_start or target > ctx.plan_end:
         return "OUT_OF_PLAN", "That date is outside your plan."
 
     others = [s for s in ctx.sessions if s.id != session.id]
-    if any(s.date == target for s in others):
-        return "DAY_OCCUPIED", "Another session is already on that day."
 
     if session.intensity_band == rules.high_intensity_band:
-        neighbours = {target - timedelta(days=1), target + timedelta(days=1)}
+        neighbours = {target - timedelta(days=1), target, target + timedelta(days=1)}
         if any(
             s.intensity_band == rules.high_intensity_band
             and s.status != "missed"
@@ -79,7 +79,7 @@ def _placement_refusal(
         ):
             return (
                 "CONSECUTIVE_HIGH_INTENSITY",
-                "Two high-intensity (push) sessions can't be on consecutive days.",
+                "Two high-intensity (push) sessions can't be on the same day or on consecutive days.",
             )
     return None
 
@@ -125,7 +125,7 @@ def check_placement(
 ) -> Optional[MoveRefusal]:
     """
     The day rules for a session that isn't on the calendar yet, or one whose intensity is changing where it stands:
-    today or later, inside the plan, a free day, and no push beside a push. Nothing about a move (it isn't one).
+    today or later, inside the plan, and no push on or beside another push. Nothing about a move (it isn't one).
     """
     return _check(session, target, ctx, rules, moving=False)
 

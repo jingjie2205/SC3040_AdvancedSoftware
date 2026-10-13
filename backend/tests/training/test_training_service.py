@@ -359,8 +359,8 @@ def test_a_move_that_makes_two_push_days_in_a_row_is_refused_with_a_suggestion()
     error = error_of(lambda: service.reschedule_session(USER_A, TODAY, saturday_push.id, sunday))
 
     assert error.code == "CONSECUTIVE_HIGH_INTENSITY"
-    assert error.suggested_date == date(2026, 10, 8)  # Thursday: Fri and Wed are taken, Tue touches Monday
-    assert error.detail["suggestedDate"] == "2026-10-08"
+    assert error.suggested_date == date(2026, 10, 9)  # Friday: a day may hold several sessions, Tue touches Monday
+    assert error.detail["suggestedDate"] == "2026-10-09"
     moved = service.reschedule_session(USER_A, TODAY, saturday_push.id, error.suggested_date)
     assert moved.date == error.suggested_date
 

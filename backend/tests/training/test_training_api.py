@@ -260,7 +260,7 @@ def test_schedule_move_refusal_carries_a_suggested_day_and_success_marks_it_move
     refused = client.patch(f"/api/v1/training/sessions/{saturday['id']}", json={"date": "2026-10-11"}, headers=headers())
     detail = refused.json()["detail"]
     assert refused.status_code == 409
-    assert detail["code"] == "CONSECUTIVE_HIGH_INTENSITY" and detail["suggestedDate"] == "2026-10-08"
+    assert detail["code"] == "CONSECUTIVE_HIGH_INTENSITY" and detail["suggestedDate"] == "2026-10-09"
 
     moved = client.patch(f"/api/v1/training/sessions/{saturday['id']}", json={"date": detail["suggestedDate"]}, headers=headers())
     assert moved.status_code == 200 and moved.json()["status"] == "moved"
@@ -385,14 +385,18 @@ def test_a_malformed_add_is_reported_field_by_field_in_the_usual_shape(client, r
     assert {"date", "activityType", "intensityBand"} <= set(detail["fieldErrors"])
 
 
+def test_adding_on_a_day_that_already_has_a_session_is_fine(client, repo):
+    onboard(client, repo)
+    generate(client)
+    shared = client.post(ADD, json=add_body(date="2026-10-07"), headers=headers())  # Wednesday already has a session
+    assert shared.status_code == 200
+    on_that_day = [s for s in sessions_of(client, date(2026, 10, 7), date(2026, 10, 7))]
+    assert len(on_that_day) == 2
+
+
 def test_adding_on_a_day_the_rules_forbid_is_a_409_with_the_nearest_day_that_works(client, repo):
     onboard(client, repo)
     generate(client)
-    taken = client.post(ADD, json=add_body(date="2026-10-07"), headers=headers())  # Wednesday already has a session
-    detail = taken.json()["detail"]
-    assert taken.status_code == 409 and detail["code"] == "DAY_OCCUPIED"
-    assert client.post(ADD, json=add_body(date=detail["suggestedDate"]), headers=headers()).status_code == 200
-
     beside_a_push = client.post(ADD, json=add_body(date="2026-10-11", intensityBand="push"), headers=headers())
     assert beside_a_push.status_code == 409 and beside_a_push.json()["detail"]["code"] == "CONSECUTIVE_HIGH_INTENSITY"
     assert beside_a_push.json()["detail"]["suggestedDate"]

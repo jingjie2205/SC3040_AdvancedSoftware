@@ -271,7 +271,6 @@ def test_a_second_session_in_a_week_made_on_its_last_days_takes_it_to_a_proporti
     [
         (TODAY - timedelta(days=1), "light", "IN_PAST"),
         (date(2026, 11, 23), "light", "OUT_OF_PLAN"),  # the plan ends on 22 Nov
-        (date(2026, 10, 7), "light", "DAY_OCCUPIED"),
         (SUNDAY, "push", "CONSECUTIVE_HIGH_INTENSITY"),  # the day after Saturday's push
     ],
 )
@@ -283,7 +282,7 @@ def test_a_day_the_rules_forbid_is_refused_and_nothing_is_written(day, band, cod
 
 def test_a_refused_day_comes_with_the_nearest_day_that_works():
     service, repo, _ = planned()
-    for day, band in ((date(2026, 10, 7), "light"), (SUNDAY, "push")):
+    for day, band in ((SUNDAY, "push"),):
         suggestion = untouched(repo, lambda: add(service, day, band=band)).suggested_date
         assert suggestion is not None and suggestion != day
         add(service, suggestion, band=band)  # and it really does work
@@ -354,22 +353,29 @@ def _replaced_plan_with_a_finished_session_today():
     return service, repo, new, history
 
 
-def test_a_day_held_by_a_replaced_plans_finished_session_is_taken_not_a_crash():
+def test_a_day_held_by_a_replaced_plans_finished_session_can_be_shared():
     service, repo, _, history = _replaced_plan_with_a_finished_session_today()
-    error = untouched(repo, lambda: add(service, history.date))
-    assert error.code == "DAY_OCCUPIED"
-    assert error.suggested_date is not None and error.suggested_date != history.date
+    added = add(service, history.date)
+    assert added.session.date == history.date
+    assert len([s for s in repo.list_sessions(USER_A, history.date, history.date)]) >= 2
 
 
-def test_moving_a_session_onto_that_day_is_refused_too():
-    """The database holds one planned session a day per user across every plan, so this used to be a server error."""
+def test_moving_a_session_onto_that_day_works_too():
     service, repo, new, history = _replaced_plan_with_a_finished_session_today()
-    mover = next(s for s in repo.list_sessions(USER_A, TODAY, new.end_date) if s.plan_id == new.id)
+    mover = next(s for s in repo.list_sessions(USER_A, TODAY + timedelta(days=1), new.end_date) if s.plan_id == new.id)
 
-    error = untouched(repo, lambda: service.reschedule_session(USER_A, TODAY, mover.id, history.date))
+    moved = service.reschedule_session(USER_A, TODAY, mover.id, history.date)
 
-    assert error.code == "DAY_OCCUPIED" and error.suggested_date != history.date
-    assert service.reschedule_session(USER_A, TODAY, mover.id, error.suggested_date).status == "moved"
+    assert moved.date == history.date and moved.status == "moved"
+
+
+def test_a_second_session_on_a_busy_day_takes_its_share_of_the_week_like_any_other():
+    service, repo, plan = planned()
+    wednesday = date(2026, 10, 7)
+    before = sum(s.target_volume for s in week_of(repo, MONDAY))
+    added = add(service, wednesday)
+    assert len(repo.list_sessions(USER_A, wednesday, wednesday)) == 2
+    assert sum(s.target_volume for s in week_of(repo, MONDAY)) == before + 0 and added.session.target_volume > 0  # the week still adds up to the plan's
 
 
 def test_a_finished_push_from_a_replaced_plan_still_counts_as_a_neighbour():
@@ -649,3 +655,40 @@ def test_the_frontend_knows_every_error_code_the_backend_can_send():
     known = (LIB / "api.ts").read_text(encoding="utf-8") + (LIB / "rules.ts").read_text(encoding="utf-8")
     missing = [code for code in get_args(ErrorCode) if f'"{code}"' not in known]
     assert missing == []
+
+
+# ------------------------------------------------------------------ two sessions on one day
+
+
+def _two_sessions_today():
+    service, repo, _ = planned()
+    first = at(repo, TODAY)
+    second = add(service, TODAY, band="light").session
+    assert {s.id for s in repo.list_sessions(USER_A, TODAY, TODAY)} == {first.id, second.id}
+    return service, repo, sorted([first, second], key=lambda s: s.id)
+
+
+def _log_session(service, session):
+    return service.log_session(
+        USER_A, TODAY, session.id,
+        LogWorkoutInput(date=TODAY, activity_type=session.activity_type, actual_duration_min=30,
+                        actual_volume=session.target_volume),
+    )
+
+
+@pytest.mark.parametrize("done_first", [0, 1])
+def test_today_and_the_summary_show_the_session_still_to_do_when_the_day_holds_two(done_first):
+    service, repo, pair = _two_sessions_today()
+    finished, waiting = pair[done_first], pair[1 - done_first]
+    assert service.get_today(USER_A, TODAY).planned.id == min(s.id for s in pair)  # nothing done: the same one every read
+
+    _log_session(service, finished)
+
+    assert service.get_today(USER_A, TODAY).planned.id == waiting.id
+    summary = service.get_summary(USER_A, TODAY).today
+    assert summary.state == "to_do" and summary.session.id == waiting.id
+
+    _log_session(service, waiting)
+
+    assert service.get_summary(USER_A, TODAY).today.state == "done"
+    assert service.get_today(USER_A, TODAY).planned.id in {finished.id, waiting.id}

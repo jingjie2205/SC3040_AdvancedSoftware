@@ -18,7 +18,7 @@ local date as `X-Client-Date: YYYY-MM-DD` so "today" matches theirs (the server 
 | POST | `/training/plan/adaptation/acknowledge` | Dismiss the "your plan was adapted" notice |
 | GET | `/training/schedule?from=&to=` | T-6 sessions and workouts in a range (max 200 days) |
 | PATCH | `/training/sessions/{id}` | T-7 reschedule `{date}`, or change the session where it stands: any of `{activityType, intensityBand, targetDurationMin}`. A request asks for a move or for a change, never both and never neither (422) |
-| POST | `/training/plan/sessions` | Plan a session by hand on a free day of the active plan `{date, activityType, intensityBand, targetDurationMin?}`. Answers `{session, adjustedCount}`. See "Planning the schedule by hand" |
+| POST | `/training/plan/sessions` | Plan a session by hand on a day of the active plan (it may already hold other sessions) `{date, activityType, intensityBand, targetDurationMin?}`. Answers `{session, adjustedCount}`. See "Planning the schedule by hand" |
 | DELETE | `/training/sessions/{id}` | T-7 remove; spreads its volume over the rest of the week |
 | GET | `/training/today` | T-3/T-4 readiness plus today's reconciled workout |
 | GET | `/training/summary` | One call for the Home page: readiness, today's session, the week so far and what is next |
@@ -109,6 +109,10 @@ failures use the same shape (status 422), including request-body validation on t
      rate alone), and `training_schema_features()` extended to `{"calories": true, "distance": true, "progression": true}`. It **is
      safe to run again**, changes no existing row and touches no other table. It was run against a throwaway
      Postgres (PGlite) loaded with the earlier migrations, including a replay of the payloads the service sends.
+   - `supabase/migrations/20261012200000_training_several_sessions_per_day.sql` drops `planned_sessions`' original
+     `unique (user_id, date)` constraint so a day can hold several sessions. The live project had already lost it (by
+     hand), so there it changes nothing; it is for a fresh install, where the write function would otherwise fail with a
+     unique violation. It **is safe to run again** and changes no row.
 
    The backend copes with a database that hasn't had the second one yet (preferences save without exam
    dates, sleep reads as missing, plans save without a goal), but logging sleep or saving an exam date then
@@ -159,8 +163,8 @@ cd backend
 python -m pytest
 ```
 
-The database is replaced by a fake that enforces the same constraints (one session per user per day,
-one active plan per user, all-or-nothing writes, no writing over another user's rows). The SQL itself
+The database is replaced by a fake that enforces the same constraints (one active plan per user,
+ all-or-nothing writes, no writing over another user's rows). The SQL itself
 was also replayed against a real Postgres (PGlite) with the payloads the service produces; that
 harness isn't part of the repo.
 
@@ -183,13 +187,16 @@ harness isn't part of the repo.
   its feature fingerprint and the scorer's version are unchanged, so new history, a new check-in or a
   switch between the model and the rules recomputes it without explicit invalidation.
 - **Baselines use the last 4 complete calendar weeks**, so no week is cut in half.
-- **One planned session per user per day**, enforced in the database across every plan, so a finished session
-  from a replaced plan still takes its day. The move and add rules look at every session the user has in and
-  around the plan's days, not only the active plan's (a move onto such a day used to reach the database and fail
-  there as a 500; now it is refused as `DAY_OCCUPIED` with the nearest free day).
+- **A day may hold several planned sessions** (a push gym and a light run, or a session the AI chat adds to a busy
+  day). The one-a-day rule was dropped: the live project had lost its `unique (user_id, date)` constraint (removed by
+  hand, in no migration), and `20261012200000_training_several_sessions_per_day.sql` makes the repo say the same. What
+  still applies is spacing: **two push sessions can't be on the same day or on consecutive days** (a missed push
+  doesn't count), checked against every session the user has in and around the plan's days, whichever plan it belongs
+  to, with the nearest valid day suggested. Today and the Home summary show the first session still to do (ordered by
+  id so the choice is stable), so a finished session never hides the one that is left; the Schedule tab lists them all.
 - **Planning the schedule by hand** (`POST /training/plan/sessions`, and `PATCH` with details). Nothing here
   needs a migration: a hand-planned session is an ordinary `planned_sessions` row of the active plan.
-  - *Where and what.* On a free day from today to the plan's end, no push beside a push (the move rules, with the
+  - *Where and what.* On any day from today to the plan's end, no push on or beside a push (the move rules, with the
     nearest valid day suggested), one of the athlete's own activities, and a length of `session_duration_min` to
     `session_duration_max` (left out, it is the preferred length scaled by the intensity, as the generator does).
     A deload week (every `deload_every_n_weeks`th week of the plan, adaptation or not) takes only `deload`

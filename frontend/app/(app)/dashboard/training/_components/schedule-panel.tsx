@@ -202,12 +202,11 @@ export function SchedulePanel({
   }
 
   const selectedEntries = days.get(selected) ?? [];
-  // A session can be planned by hand on any free day from today to the end of the plan.
+  // A session can be planned by hand on any day from today to the end of the plan, whatever is already on it.
   const canPlanHere =
     plan !== null &&
     selected >= (plan.startDate > today ? plan.startDate : today) &&
-    selected <= plan.endDate &&
-    !selectedEntries.some((entry) => entry.session !== null);
+    selected <= plan.endDate;
 
   return (
     <div className="space-y-6">

@@ -10,7 +10,6 @@ export type MoveRefusalCode =
   | "NO_CHANGE"
   | "IN_PAST"
   | "OUT_OF_PLAN"
-  | "DAY_OCCUPIED"
   | "CONSECUTIVE_HIGH_INTENSITY";
 
 export type MoveCheck =
@@ -27,7 +26,10 @@ export interface MoveContext {
 
 const isHighIntensity = (s: PlannedSession) => s.intensityBand === TRAINING_RULES.highIntensityBand;
 
-/** Whether `session` may sit on `target`: today or later, inside the plan, a free day, no push beside a push. */
+/**
+ * Whether `session` may sit on `target`: today or later, inside the plan, and no push on the same day as another push
+ * or the day before or after one. Any number of other sessions may share the day.
+ */
 function placementRefusal(
   session: PlannedSession,
   target: string,
@@ -40,9 +42,6 @@ function placementRefusal(
     return { code: "OUT_OF_PLAN", reason: "That date is outside your plan." };
   }
   const others = ctx.sessions.filter((s) => s.id !== session.id);
-  if (others.some((s) => s.date === target)) {
-    return { code: "DAY_OCCUPIED", reason: "Another session is already on that day." };
-  }
   if (isHighIntensity(session)) {
     const before = addDays(target, -1);
     const after = addDays(target, 1);
@@ -50,12 +49,12 @@ function placementRefusal(
       (s) =>
         isHighIntensity(s) &&
         s.status !== "missed" &&
-        (s.date === before || s.date === after),
+        (s.date === before || s.date === target || s.date === after),
     );
     if (clash) {
       return {
         code: "CONSECUTIVE_HIGH_INTENSITY",
-        reason: "Two high-intensity (push) sessions can't be on consecutive days.",
+        reason: "Two high-intensity (push) sessions can't be on the same day or on consecutive days.",
       };
     }
   }

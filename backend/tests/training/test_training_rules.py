@@ -55,9 +55,17 @@ def test_past_dates_and_dates_outside_the_plan_are_refused():
     assert check_move(mover, PLAN_END + timedelta(days=1), ctx([mover])).code == "OUT_OF_PLAN"
 
 
-def test_an_occupied_day_is_refused():
+def test_a_day_may_hold_more_than_one_session():
     mover, other = session(date(2026, 10, 2)), session(date(2026, 10, 3))
-    assert check_move(mover, other.date, ctx([mover, other])).code == "DAY_OCCUPIED"
+    assert check_move(mover, other.date, ctx([mover, other])) is None
+
+
+def test_two_push_sessions_may_not_share_a_day_either():
+    mover, other = session(date(2026, 10, 2), "push"), session(date(2026, 10, 3), "push")
+    refusal = check_move(mover, other.date, ctx([mover, other]))
+    assert refusal.code == "CONSECUTIVE_HIGH_INTENSITY" and "same day" in refusal.reason
+    light_mover = session(date(2026, 10, 2), "light")
+    assert check_move(light_mover, other.date, ctx([light_mover, other])) is None  # a push and a light session can share
 
 
 def test_two_push_sessions_on_consecutive_days_are_refused_with_the_nearest_valid_day():
@@ -70,7 +78,7 @@ def test_two_push_sessions_on_consecutive_days_are_refused_with_the_nearest_vali
     refusal = check_move(push_sat, date(2026, 10, 18), ctx(all_sessions))  # Sunday, next to Monday's push
 
     assert refusal.code == "CONSECUTIVE_HIGH_INTENSITY"
-    assert refusal.suggested_date == date(2026, 10, 15)  # Thursday: Fri/Tue/Wed are unusable
+    assert refusal.suggested_date == date(2026, 10, 16)  # Friday: it already has a session, and a day may hold several
     assert check_move(push_sat, refusal.suggested_date, ctx(all_sessions)) is None
 
 
@@ -112,12 +120,17 @@ def test_a_new_session_cannot_go_outside_the_plan():
 
 
 @pytest.mark.parametrize("status", ["planned", "accepted", "moved", "completed", "partial", "missed"])
-def test_a_session_in_any_state_takes_its_day_and_the_refusal_names_the_nearest_free_one(status):
+def test_a_new_session_may_share_a_day_with_one_in_any_state(status):
     other = session(date(2026, 10, 3), status=status)
-    refusal = check_placement(new_session(other.date), other.date, ctx([other]))
-    assert refusal.code == "DAY_OCCUPIED"
-    assert refusal.suggested_date == date(2026, 10, 4)  # the later day wins a tie
-    assert check_placement(new_session(refusal.suggested_date), refusal.suggested_date, ctx([other])) is None
+    assert check_placement(new_session(other.date), other.date, ctx([other])) is None
+
+
+def test_a_new_push_cannot_go_on_the_day_of_a_push_and_is_pointed_to_a_day_that_works():
+    other = session(date(2026, 10, 19), "push")
+    refusal = check_placement(new_session(other.date, "push"), other.date, ctx([other]))
+    assert refusal.code == "CONSECUTIVE_HIGH_INTENSITY"
+    assert refusal.suggested_date == date(2026, 10, 21)  # the days either side are beside the push too; the later of the two clear days wins
+    assert check_placement(new_session(other.date, "light"), other.date, ctx([other])) is None
 
 
 def test_a_new_push_cannot_sit_beside_a_push_and_is_pointed_to_a_day_that_works():

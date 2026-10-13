@@ -109,6 +109,15 @@ def _new_id() -> str:
     return str(uuid4())
 
 
+def _session_for_today(sessions: Sequence[PlannedSession]) -> Optional[PlannedSession]:
+    """
+    The session Today shows when a day holds several: the first one still to do (so a finished session never hides the
+    one that is left), otherwise the first. Ordered by id so the choice doesn't change from one read to the next.
+    """
+    ordered = sorted(sessions, key=lambda s: s.id)
+    return next((s for s in ordered if s.status in MOVABLE_STATUSES), ordered[0] if ordered else None)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -320,7 +329,7 @@ class TrainingService:
 
     def add_session(self, user_id: str, today: date, data: AddSessionRequest) -> AddSessionResult:
         """
-        Plan a session on a free day of the active plan. The plan, not the athlete, decides how much training a week
+        Plan a session on a day of the active plan. The plan, not the athlete, decides how much training a week
         carries (see `planner.week_pool`): the new session takes its share of that, by intensity and length, and the
         week's other sessions give a little to make room, the same promise removing one makes the other way round.
         """
@@ -428,10 +437,7 @@ class TrainingService:
         plan = self._sync(user_id, today)
         planned: Optional[PlannedSession] = None
         if plan:
-            planned = next(
-                (s for s in self.repo.list_sessions(user_id, today, today) if s.plan_id == plan.id),
-                None,
-            )
+            planned = _session_for_today([s for s in self.repo.list_sessions(user_id, today, today) if s.plan_id == plan.id])
         sleep_hours = self.repo.get_sleep(user_id, today)
         readiness = self._readiness(user_id, today, sleep_hours)
         return TodayView(
@@ -546,7 +552,7 @@ class TrainingService:
         mine = [
             s for s in self.repo.list_sessions(user_id, monday, sunday) if plan and s.plan_id == plan.id
         ]
-        session = next((s for s in mine if s.date == today), None)
+        session = _session_for_today([s for s in mine if s.date == today])
         # Hard Rule 1: Strava rows are dropped before anything is counted.
         workouts = modelling_workouts(self.repo.list_workouts(user_id, monday, sunday))
         upcoming: List[PlannedSession] = []

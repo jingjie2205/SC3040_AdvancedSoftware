@@ -123,6 +123,15 @@ function planTargets(baseline: number, weeks: number, weekOffset: number, foreca
   };
 }
 
+/**
+ * The session Today shows when a day holds several: the first one still to do, otherwise the first, in a fixed order
+ * (the backend's `_session_for_today`).
+ */
+function sessionForToday(sessions: PlannedSession[]): PlannedSession | null {
+  const ordered = [...sessions].sort((a, b) => a.id.localeCompare(b.id));
+  return ordered.find((x) => MOVABLE_STATUSES.includes(x.status)) ?? ordered[0] ?? null;
+}
+
 /** Every workout the fixtures make is the athlete's own: Strava logs only come from the real backend. */
 function makeWorkout(
   fields: Omit<WorkoutSession, "id" | "createdAt" | "externalId" | "distanceM"> & { distanceM?: number | null },
@@ -453,7 +462,7 @@ function planSnapshot(s: MockState) {
   const mine = (plan ? s.sessions.filter((x) => x.planId === plan.id) : []).sort((a, b) =>
     a.date.localeCompare(b.date),
   );
-  const session = mine.find((x) => x.date === today) ?? null;
+  const session = sessionForToday(mine.filter((x) => x.date === today));
   const week = mine.filter((x) => x.date >= monday && x.date <= sunday);
   const state: TodayState = !plan
     ? "no_plan"
@@ -841,7 +850,7 @@ export const mockTrainingApi: TrainingApi = {
     const today = todayISO();
     const plan = s.plan;
     const planned = plan
-      ? (s.sessions.find((x) => x.planId === plan.id && x.date === today) ?? null)
+      ? sessionForToday(s.sessions.filter((x) => x.planId === plan.id && x.date === today))
       : null;
     const readiness = readinessFor(
       today,

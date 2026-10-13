@@ -164,9 +164,6 @@ class FakeTrainingRepository:
             if existing and existing[0] != user_id:
                 continue
             self.sessions[session.id] = (user_id, deepcopy(session))
-        days = [s.date for o, s in self.sessions.values() if o == user_id]
-        if len(days) != len(set(days)):
-            raise ConstraintViolation("one planned session per user per day")
 
         for workout in changes.insert_workouts:
             if workout.planned_session_id and workout.planned_session_id not in self.sessions:
