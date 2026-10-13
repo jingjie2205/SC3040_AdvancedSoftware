@@ -1,85 +1,139 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchBatchCalories } from "@/lib/nutrition";
+import { fetchBatchCalories, fetchCalorieCalendar } from "@/lib/nutrition";
+import { addDays, startOfWeek, todayISO } from "@/lib/training/dates";
 import {
   ResponsiveContainer,
   BarChart,
   Bar,
-  Cell,
-  Line,
   XAxis,
   YAxis,
   Tooltip,
   CartesianGrid,
+  Legend,
+  type TooltipProps,
 } from "recharts";
 
 type FoodView = "daily" | "weekly";
+type FoodChartData = {
+  label: string;
+  intake: number;
+  goal: number;
+  averageIntake?: number;
+  averageGoal?: number;
+};
+type Profile = {
+  age?: number;
+  weight?: number;
+  height?: number;
+  biologicalSex?: "MALE" | "FEMALE";
+  activityLevel?: string;
+};
+
+const activityMultiplier: Record<string, number> = {
+  SEDENTARY: 1.2,
+  LIGHTLY_ACTIVE: 1.375,
+  MODERATELY_ACTIVE: 1.55,
+  VERY_ACTIVE: 1.725,
+  EXTRA_ACTIVE: 1.9,
+};
+
+function calculateTdee(profile: Profile): number | null {
+  if (
+    profile.age == null ||
+    profile.weight == null ||
+    profile.height == null ||
+    !profile.biologicalSex ||
+    !profile.activityLevel
+  ) {
+    return null;
+  }
+
+  const bmr =
+    10 * profile.weight +
+    6.25 * profile.height -
+    5 * profile.age +
+    (profile.biologicalSex === "MALE" ? 5 : -161);
+  const multiplier = activityMultiplier[profile.activityLevel];
+  return multiplier ? Math.round(bmr * multiplier) : null;
+}
 
 export default function FoodConsumption() {
   const [foodView, setFoodView] = useState<FoodView>("daily");
-  const [dailyFoodData, setDailyFoodData] = useState<any[]>([]);
-  const [weeklyFoodData, setWeeklyFoodData] = useState<any[]>([]);
+  const [dailyFoodData, setDailyFoodData] = useState<FoodChartData[]>([]);
+  const [weeklyFoodData, setWeeklyFoodData] = useState<FoodChartData[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     async function fetchFoodData() {
-      const today = new Date();
-      const endDate = today.toISOString().split("T")[0];
-      const startDate = new Date();
-      startDate.setDate(today.getDate() - 34);
-      const startDateString = startDate.toISOString().split("T")[0];
-
-      const results = await fetchBatchCalories(startDateString, endDate);
+      const endDate = todayISO();
+      const startDate = addDays(endDate, -34);
+      const [results, calendar, profileResponse] = await Promise.all([
+        fetchBatchCalories(startDate, endDate),
+        Promise.all([
+          fetchCalorieCalendar(startDate, addDays(startDate, 30)),
+          fetchCalorieCalendar(addDays(startDate, 31), endDate),
+        ]).then(([firstRange, secondRange]) => [...firstRange, ...secondRange]),
+        fetch("/api/user"),
+      ]);
       const logsByDate = new Map(results.map((log) => [log.date, log]));
+      const targetsByDate = new Map(calendar.map((day) => [day.date, day]));
+      if (!profileResponse.ok) {
+        throw new Error("Could not load your profile for calorie goals.");
+      }
+      const tdee = calculateTdee((await profileResponse.json()) as Profile);
+
+      const goalFor = (date: string) =>
+        targetsByDate.get(date)?.target_calories ?? tdee ?? 0;
 
       // Process daily data
-      const dailyData = [];
+      const dailyData: FoodChartData[] = [];
       for (let i = 6; i >= 0; i--) {
-        const day = new Date();
-        day.setDate(today.getDate() - i);
-        const dateString = day.toISOString().split("T")[0];
+        const dateString = addDays(endDate, -i);
+        const day = new Date(`${dateString}T12:00:00`);
         const log = logsByDate.get(dateString);
         const intake = log?.total_calories || 0;
-        const goal = 2300; // Default goal
         const label = `${day.getMonth() + 1}/${day.getDate()}`;
-        dailyData.push({ label, intake, goal });
+        dailyData.push({ label, intake, goal: goalFor(dateString) });
       }
       setDailyFoodData(dailyData);
 
       // Process weekly data
-      const weeklyData = [];
+      const weeklyData: FoodChartData[] = [];
       for (let i = 4; i >= 0; i--) {
-        const weekStart = new Date();
-        weekStart.setDate(today.getDate() - i * 7 - today.getDay() + 1);
-        const weekEnd = new Date(weekStart);
-        weekEnd.setDate(weekStart.getDate() + 6);
+        const weekStartDate = addDays(startOfWeek(endDate), -i * 7);
+        const weekEndDate = addDays(weekStartDate, 6);
 
         let totalCalories = 0;
-        let daysWithData = 0;
+        let goal = 0;
 
         for (let j = 0; j < 7; j++) {
-          const day = new Date(weekStart);
-          day.setDate(weekStart.getDate() + j);
-          const dateString = day.toISOString().split("T")[0];
+          const dateString = addDays(weekStartDate, j);
           const log = logsByDate.get(dateString);
+          goal += goalFor(dateString);
           if (log && log.total_calories) {
             totalCalories += log.total_calories;
-            daysWithData++;
           }
         }
 
-        const averageIntake =
-          daysWithData > 0 ? Math.round(totalCalories / daysWithData) : 0;
+        const averageIntake = Math.round(totalCalories / 7);
         const intake = totalCalories;
-        const goal = 2300; // Default goal
+        const averageGoal = Math.round(goal / 7);
+        const weekStart = new Date(`${weekStartDate}T12:00:00`);
+        const weekEnd = new Date(`${weekEndDate}T12:00:00`);
         const label = `${weekStart.getMonth() + 1}/${weekStart.getDate()} - ${
           weekEnd.getMonth() + 1
         }/${weekEnd.getDate()}`;
-        weeklyData.push({ label, intake, goal, averageIntake });
+        weeklyData.push({ label, intake, goal, averageIntake, averageGoal });
       }
       setWeeklyFoodData(weeklyData);
     }
-    fetchFoodData();
+    fetchFoodData()
+      .catch((error: unknown) => {
+        console.error("Error fetching food consumption data:", error);
+      })
+      .finally(() => setIsLoading(false));
   }, []);
 
   const foodData = foodView === "daily" ? dailyFoodData : weeklyFoodData;
@@ -109,42 +163,36 @@ export default function FoodConsumption() {
       </div>
 
       <div className="h-[240px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={foodData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="label" stroke="#64748b" fontSize={11} />
-            <YAxis stroke="#ffffff" fontSize={11} />
-            <Tooltip
-              cursor={{ fill: "rgba(100, 116, 139, 0.1)" }}
-              content={CustomTooltip}
-            />
-            <Bar dataKey="intake" radius={[4, 4, 0, 0]} name="Calories">
-              {foodData.map((entry, idx) => (
-                <Cell
-                  key={idx}
-                  fill={entry.intake > entry.goal ? "#f59e0b" : "#10b981"}
-                />
-              ))}
-            </Bar>
-            <Line
-              type="monotone"
-              dataKey="goal"
-              stroke="#94a3b8"
-              strokeDasharray="4 4"
-              strokeWidth={1.5}
-              dot={false}
-              name="Goal"
-            />
-          </BarChart>
-        </ResponsiveContainer>
+        {isLoading ? (
+          <div className="flex h-full items-center justify-center text-sm text-slate-400">
+            Loading data
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={foodData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="label" stroke="#64748b" fontSize={11} />
+              <YAxis stroke="#ffffff" fontSize={11} />
+              <Legend
+                wrapperStyle={{ color: "#cbd5e1", fontSize: "12px", paddingTop: "8px" }}
+              />
+              <Tooltip
+                cursor={{ fill: "rgba(100, 116, 139, 0.1)" }}
+                content={CustomTooltip}
+              />
+              <Bar dataKey="intake" radius={[4, 4, 0, 0]} name="Consumed" fill="#10b981" />
+              <Bar dataKey="goal" radius={[4, 4, 0, 0]} name="Target" fill="#f97316" />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </div>
   );
 }
 
-function CustomTooltip({ active, payload, label }: any) {
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
+function CustomTooltip({ active, payload, label }: TooltipProps<number, string>) {
+  const data = payload?.find(entry => entry.payload)?.payload as FoodChartData | undefined;
+  if (active && data) {
 
     return (
       <div className="rounded-lg border border-slate-700 bg-slate-900/80 p-2 text-sm shadow-sm backdrop-blur-md">
@@ -172,8 +220,12 @@ function CustomTooltip({ active, payload, label }: any) {
             </div>
           )}
           <div className="flex items-center justify-between">
-            <span className="text-slate-400">Goal</span>
-            <span className="font-medium text-white">{data.goal} kcal</span>
+            <span className="text-slate-400">
+              {data.averageGoal !== undefined ? "Avg. Daily Target" : "Target"}
+            </span>
+            <span className="font-medium text-white">
+              {data.averageGoal ?? data.goal} kcal
+            </span>
           </div>
         </div>
       </div>

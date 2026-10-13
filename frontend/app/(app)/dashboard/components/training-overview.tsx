@@ -178,7 +178,7 @@ export default function TrainingOverview() {
             })()
           ) : (
             <div className="sm:col-span-5 text-center py-8 text-slate-400">
-              No recent workouts found.
+              Loading data
             </div>
           )}
         </div>

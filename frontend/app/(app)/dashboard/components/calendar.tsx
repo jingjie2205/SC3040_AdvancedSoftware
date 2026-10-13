@@ -167,21 +167,22 @@ export default function CheckInCalendar() {
         {dates.map((date) => {
           const checkedIn = isCheckedIn(date);
           const currentDay = isToday(date);
+          const futureDay = date > today;
 
           return (
             <div
               key={date.toISOString()}
               className={`checkin-day
-                ${checkedIn ? "checked-in" : "missed"}
+                ${checkedIn ? "checked-in" : futureDay ? "future" : "missed"}
                 ${currentDay ? "today" : ""}
               `}
             >
               <span className="checkin-date">{date.getDate()}</span>
               {checkedIn ? (
                 <span className="checkin-mark">✓</span>
-              ) : (
+              ) : !futureDay ? (
                 <span className="missed-checkin-mark">✗</span>
-              )}
+              ) : null}
             </div>
           );
         })}
