@@ -1,0 +1,448 @@
+# Training routine backend
+
+The API behind the Training page (`frontend/app/(app)/dashboard/training`). It runs inside the existing
+FastAPI service; `app/main.py` mounts it with `install_training_routes(app)`.
+
+## Endpoints
+
+All under `/api/v1`, all need `Authorization: Bearer <Supabase access token>`. Send the user's
+local date as `X-Client-Date: YYYY-MM-DD` so "today" matches theirs (the server has no timezone data).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / PUT | `/training/preferences` | T-1 read / save preferences, including optional upcoming exam dates |
+| GET | `/training/plan` | Active plan, or `null` |
+| POST | `/training/plan` | T-2 generate `{weeks, confirmReplace}`; replacing needs `confirmReplace: true` |
+| GET | `/training/plan/forecast` | The athlete's weekly completed load, the forecast fitted to it, how it did on their own earlier weeks, and the weekly progression a plan would use today, with the steps that led to it. A read, nothing changes. See "How fast a plan builds up" |
+| POST | `/training/plan/recalculate` | T-8 adapt from what was completed |
+| POST | `/training/plan/adaptation/acknowledge` | Dismiss the "your plan was adapted" notice |
+| GET | `/training/schedule?from=&to=` | T-6 sessions and workouts in a range (max 200 days) |
+| PATCH | `/training/sessions/{id}` | T-7 reschedule `{date}`, or change the session where it stands: any of `{activityType, intensityBand, targetDurationMin}`. A request asks for a move or for a change, never both and never neither (422) |
+| POST | `/training/plan/sessions` | Plan a session by hand on a day of the active plan (it may already hold other sessions) `{date, activityType, intensityBand, targetDurationMin?}`. Answers `{session, adjustedCount}`. See "Planning the schedule by hand" |
+| DELETE | `/training/sessions/{id}` | T-7 remove; spreads its volume over the rest of the week |
+| GET | `/training/today` | T-3/T-4 readiness plus today's reconciled workout |
+| GET | `/training/summary` | One call for the Home page: readiness, today's session, the week so far and what is next |
+| POST | `/training/coach` | A short note about today from Gemini, or a built-in message. 429 if asked again too fast |
+| PUT / DELETE | `/training/sleep` | Last night's sleep `{hours}` (0 to 16), filed under the user's today; it feeds today's readiness. DELETE removes it |
+| POST | `/training/sessions/{id}/respond` | T-4 accept / swap / skip |
+| POST | `/training/sessions/{id}/log` | T-5 log a planned session `{date, activityType, actualDurationMin, actualVolume, rpe?, avgHr?, calories?}`. `calories` is optional: whole kcal, 0 to 20,000 (`config.workout_calories_max`) |
+| POST | `/training/sessions` | T-5 log an ad hoc session (same body). Calories come back on the workout in `GET /training/schedule`, where the Home page reads them |
+| GET | `/training/strava/status` | The Strava tab: whether Strava is connected, and how many activities from it are on the schedule. No call to Strava |
+| POST | `/training/strava/pull` | "Upload Strava data": the latest 100 Strava activities as cards, newest first, each saying how it would be saved and whether it already is. Saves nothing. 409 `NOT_CONNECTED`, 429, 503 |
+| POST | `/training/strava/save` | "Save to schedule" `{stravaIds}` (1 to 100): saves those activities as training logs (`source = 'strava'`). Asks Strava again, so what is saved is what Strava said. Safe to repeat. Answers `{savedIds, alreadySaved, skipped}` |
+| DELETE | `/training/strava/logs` | Take every Strava-sourced log off the schedule. The athlete's own logs stay |
+| POST | `/readiness/score` | Features in, score + classification + factors out. Stateless |
+| GET | `/readiness/model` | Which scorer is live (trained model or rules), what it was trained on, and why if it fell back. No user data |
+
+Errors are `{"detail": {"code", "message", "fieldErrors"?, "suggestedDate"?}}`. Validation
+failures use the same shape (status 422), including request-body validation on these paths.
+
+## Layout
+
+| File | Role |
+|---|---|
+| `config.py` | Every tunable rule (thresholds, intervals, triggers). Change numbers here only |
+| `models.py` | Pydantic models, camelCase on the wire, no user id inside any of them |
+| `planner.py` | Baseline, periodisation, session placement, and the load a week carries when its sessions are planned by hand. Pure functions |
+| `forecast.py` | The load forecast behind a plan's weekly progression: the weekly series, Holt's damped-trend smoothing fitted per athlete, a walk-forward test of it, plan completion, the rate and the steps that explain it. Pure functions |
+| `rules.py` | Can a session move or be placed on a day? Which intensities a week allows. Readiness vs plan reconciliation. Pure functions |
+| `readiness.py` | Feature builder and the `ReadinessScorer` interface with the rule-based scorer |
+| `coach.py` | The AI coach: the fixed facts it may be given, the prompt, the Gemini client and the built-in fallback |
+| `ml/` | Stage 2: the trained readiness model, its training pipeline and its fallback. Start with `ml/README.md` |
+| `service.py` | Application logic. Takes `user_id` and `today` from the caller |
+| `repository.py` | Supabase access and the `ChangeSet` applied in one transaction |
+| `clock.py` | The client-date header ("today" as the user sees it) |
+| `router.py` | Routes, plus `install(app)` |
+| `strava_sync.py`, `strava_router.py` | Activities pulled from Strava as cards and saved to the schedule as `source = 'strava'` logs. The only code here that touches Strava or writes such a log, and nothing else imports them except the installer in `__init__.py` (see "The Strava tab") |
+
+## Turning it on against a real Supabase project
+
+1. **Look for collisions first.** `create table if not exists` silently skips a table that already
+   exists, and the migration would then fail on columns that aren't there. When the live project was
+   checked (2026-10-07) it held the original ERD schema, including empty `training_plans`,
+   `workout_sessions` and `exercises` tables. That is why this migration's plan and workout tables are
+   named `training_routine_plans` and `training_workout_logs`. Before running it anywhere, in the SQL editor:
+   ```sql
+   select table_name from information_schema.tables
+   where table_schema = 'public'
+     and table_name in ('training_preferences','training_routine_plans','planned_sessions','training_workout_logs','readiness_scores');
+   -- expect no rows
+
+   select proname from pg_proc where proname = 'training_apply_changes';
+   -- expect no rows
+   ```
+2. **Apply the migrations, in order**, in the Supabase SQL editor (or `supabase db push`). The first three need
+   only `auth.users` and touch no other feature's table; the fourth is for a project that also has the
+   gamification migrations.
+   - `supabase/migrations/20260930000000_training_routine.sql` creates the five training tables and the
+     write function. A script runs as one transaction, so an error changes nothing, but it is **not safe
+     to run twice** (the `create policy` lines have no `if not exists`).
+   - `supabase/migrations/20261007120000_training_inputs.sql` adds `training_preferences.exam_dates`,
+     `training_routine_plans.goal` and the `training_sleep_logs` table, replaces the write function so
+     plans carry their goal, and takes the write privileges on all six tables away from signed-in and
+     signed-out users. It **is safe to run again**; running it again also closes anything opened up in
+     the meantime.
+   - `supabase/migrations/20261010100000_training_strava_logs.sql` adds one nullable column to
+     `training_workout_logs`, `external_id` (the Strava activity a log came from), a unique index on
+     `(user_id, source, external_id)` so an activity can be saved once, and a check that a `strava` log always
+     names its activity. It **is safe to run again**, changes no existing row and touches no other table.
+   - `supabase/migrations/20261011100000_gamification_skip_strava_xp.sql` (run after the gamification
+     migrations, the last of which is `20261011000000_gamification_pending_xp.sql`) replaces the gamification
+     trigger function `gamification_award_logged_activity()` with its current body plus one early return for
+     `source = 'strava'`. Without it, the trigger on `training_workout_logs` pays 50 XP for every row inserted,
+     so each saved Strava activity would earn 50 XP (and "Save all" up to 5,000, again after every removal, and
+     challenge progress with it). It **is safe to run again**, and it is the one change here to another
+     owner's code, flagged to Yew Yi in the PR that added it. It leaves existing XP alone.
+   - `supabase/migrations/20261011200000_training_logs_calories.sql` lets a logged workout keep the calories the
+     athlete typed. The live project already had a hand-added `calories` column on `training_workout_logs`
+     (bigint, nullable, a few values in it) that nothing in the repo created or wrote, so the column is only
+     added where it is missing and an existing one is left as it is; a range check is added either way, the write
+     function `training_apply_changes` is replaced with the same body plus calories in the workout insert, and
+     `training_schema_features()` is added, which the backend asks before it accepts calories (it answers
+     `{"calories": true}` only once the write function keeps them, which the column alone doesn't prove). It **is safe
+     to run again** and changes no existing row.
+   - `supabase/migrations/20261012100000_training_plan_progression.sql` (run after `20261012000000_training_logs_distance.sql`,
+     whose write function it extends) lets a plan remember the weekly progression
+     it was built with: one nullable column, `training_routine_plans.progression_pct` (0 to 20, null meaning the
+     standard rate, which every earlier plan has), a range check, the write function `training_apply_changes`
+     replaced with the same body plus that column (a payload without it, from an older backend, leaves a stored
+     rate alone), and `training_schema_features()` extended to `{"calories": true, "distance": true, "progression": true}`. It **is
+     safe to run again**, changes no existing row and touches no other table. It was run against a throwaway
+     Postgres (PGlite) loaded with the earlier migrations, including a replay of the payloads the service sends.
+   - `supabase/migrations/20261012200000_training_several_sessions_per_day.sql` drops `planned_sessions`' original
+     `unique (user_id, date)` constraint so a day can hold several sessions. The live project had already lost it (by
+     hand), so there it changes nothing; it is for a fresh install, where the write function would otherwise fail with a
+     unique violation. It **is safe to run again** and changes no row.
+
+   The backend copes with a database that hasn't had the second one yet (preferences save without exam
+   dates, sleep reads as missing, plans save without a goal), but logging sleep or saving an exam date then
+   answers 503 with a message saying to apply it. Saving from the Strava tab answers 503 the same way until the
+   third (pulling and showing cards needs no migration; the schedule just can't hold a Strava log before it).
+   Apply the fourth before anyone saves Strava activities on a project that has the gamification trigger.
+   Logging a workout **with** calories answers 503 ("Calories aren't set up on this database yet") until the fifth
+   is applied, instead of saving the log and losing the number; a log without calories is never affected.
+   Until the progression migration is applied, plans are built at the standard rate and store no rate (`progression_pct` stays null,
+   and the backend refuses to write one rather than lose it). `GET /training/plan/forecast` works either way: the
+   Plan tab shows what a plan would use today, and only compares it with the plan's own rate when the plan has one.
+3. **Check it landed.** In the SQL editor:
+   ```sql
+   select tablename, rowsecurity from pg_tables
+   where schemaname = 'public'
+     and tablename in ('training_preferences','training_routine_plans','planned_sessions','training_workout_logs','readiness_scores','training_sleep_logs');
+   -- expect 6 rows, all rowsecurity = true
+
+   select has_function_privilege('anon', 'public.training_apply_changes(uuid, jsonb)', 'execute') as anon,
+          has_function_privilege('authenticated', 'public.training_apply_changes(uuid, jsonb)', 'execute') as authenticated,
+          has_function_privilege('service_role', 'public.training_apply_changes(uuid, jsonb)', 'execute') as service_role;
+   -- expect false, false, true
+
+   select has_table_privilege('authenticated', 'public.training_sleep_logs', 'insert') as signed_in_can_write,
+          has_table_privilege('authenticated', 'public.training_sleep_logs', 'select') as signed_in_can_read,
+          has_table_privilege('anon', 'public.training_sleep_logs', 'select') as signed_out_can_read;
+   -- expect false, true, false
+   ```
+4. **Backend environment** (`backend/.env`):
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY` (server only; never a `NEXT_PUBLIC_` variable)
+   Who the caller is comes from the team's shared `get_current_user_id`
+   (`app/commons/auth/deps.py`): it asks Supabase Auth to resolve the bearer token, so no JWT secret is
+   needed here. A missing, malformed or unrecognised token is a 401.
+5. **Frontend**: set `NEXT_PUBLIC_TRAINING_API=http` (and `NEXT_PUBLIC_BACKEND_URL` if it isn't
+   `http://localhost:8000`). Without the flag the page runs on in-memory fixtures.
+6. **Smoke test** with a real access token (sign in through the login page, or copy the access token of a
+   signed-in session):
+   ```
+   curl -H "Authorization: Bearer <access token>" -H "X-Client-Date: <today>" http://localhost:8000/api/v1/training/preferences
+   ```
+   Expect `null` for a new user, and 401 without the header.
+
+## Tests
+
+```
+cd backend
+python -m pytest
+```
+
+The database is replaced by a fake that enforces the same constraints (one active plan per user,
+ all-or-nothing writes, no writing over another user's rows). The SQL itself
+was also replayed against a real Postgres (PGlite) with the payloads the service produces; that
+harness isn't part of the repo.
+
+## How the hard rules are enforced
+
+| Rule | Where | Test |
+|---|---|---|
+| 1. Strava never reaches an AI feature | `readiness.build_features` and `planner.modelling_workouts` drop `source == 'strava'`. Both scorers only see those features, and the model is trained on synthetic data. The scorer never reads `activities`. The coach's week minutes go through `modelling_workouts` too, and so do the load forecast's weekly series and plan-completion share, so a Strava row can't move how fast a plan builds up. Activities saved from the page's Strava tab are `training_workout_logs` rows flagged `source = 'strava'`, never linked to a planned session and awarded no XP (the gamification trigger skips them, see the fourth migration); only `strava_sync.py` imports Strava code or writes such a row, and the tab's modules and the training API client never import each other. A property test saves 40 Strava logs and checks that the plan, readiness, summary and coach prompts come out identical | `test_training_readiness.py`, `test_training_planner.py`, `test_training_service.py`, `test_training_model.py` (the trained model), `test_training_coach.py` and `test_training_summary.py` (a Strava row can't reach the prompt or the totals), `test_training_forecast.py` (a Strava log changes nothing in the forecast, the rate or plan completion), `test_training_strava_isolation.py` (the behaviour above, and the imports), `test_training_strava_sync.py` |
+| 2. Reconciliation is one-directional | `rules.reconcile` | `test_training_rules.py` (all nine band pairs) |
+| 3. Rebaseline on completed sessions | `planner.baseline_from_history` reads logged workouts only. The load forecast does too: its weekly series is what was logged, and a session that came due and wasn't logged counts as not done in the completion share | `test_training_planner.py`, `test_training_forecast.py` |
+| 4. Readiness is private | Only the owner's own `GET /today` and `GET /summary`, and the stateless `/readiness/score`, can return it; selects are scoped to the user. The sleep entries and exam dates that feed it are held to the same rule: only the owner's own `GET /today` and `GET /preferences` return them. Nothing that feeds or comes from the score is ever given to Gemini: the coach's facts are built from the plan only, and readiness isn't even computed on its path | `test_training_api.py` walks the OpenAPI schema (exactly three operations carry readiness, and the coach isn't one); `test_training_repository.py`; `test_training_inputs.py`; `test_training_coach.py` (the exact prompt, forbidden words, an exploding scorer, an import guard) |
+| 5. Not-medical-advice notice | `config.PLAN_NOTICE`, stored on every plan | `test_training_service.py` |
+
+## Behaviour worth knowing
+
+- **Missed sessions and auto-adaptation happen on read.** When the plan, schedule or today is
+  requested, sessions whose day has passed unlogged become `missed`, and if that (or persistently
+  low readiness) crosses a trigger the plan is adapted. It is idempotent and needs no scheduler.
+- **The readiness cache is keyed on its inputs and the scorer.** A cached score is reused only while
+  its feature fingerprint and the scorer's version are unchanged, so new history, a new check-in or a
+  switch between the model and the rules recomputes it without explicit invalidation.
+- **Baselines use the last 4 complete calendar weeks**, so no week is cut in half.
+- **A day may hold several planned sessions** (a push gym and a light run, or a session the AI chat adds to a busy
+  day). The one-a-day rule was dropped: the live project had lost its `unique (user_id, date)` constraint (removed by
+  hand, in no migration), and `20261012200000_training_several_sessions_per_day.sql` makes the repo say the same. What
+  still applies is spacing: **two push sessions can't be on the same day or on consecutive days** (a missed push
+  doesn't count), checked against every session the user has in and around the plan's days, whichever plan it belongs
+  to, with the nearest valid day suggested. Today and the Home summary show the first session still to do (ordered by
+  id so the choice is stable), so a finished session never hides the one that is left; the Schedule tab lists them all.
+- **Planning the schedule by hand** (`POST /training/plan/sessions`, and `PATCH` with details). Nothing here
+  needs a migration: a hand-planned session is an ordinary `planned_sessions` row of the active plan.
+  - *Where and what.* On any day from today to the plan's end, no push on or beside a push (the move rules, with the
+    nearest valid day suggested), one of the athlete's own activities, and a length of `session_duration_min` to
+    `session_duration_max` (left out, it is the preferred length scaled by the intensity, as the generator does).
+    A deload week (every `deload_every_n_weeks`th week of the plan, adaptation or not) takes only `deload`
+    sessions and every other week takes `push` or `light`, because that is how the generator builds a week and
+    how the Plan tab labels one. Field problems come back as 422 `VALIDATION` with `fieldErrors`.
+  - *How much load.* The plan decides what a week carries (`planner.plan_week_target`): its whole load with the
+    usual number of sessions (`sessions_per_week`, from the preferences) and a proportional share with fewer,
+    as the generator builds a week that is already partly gone (`planner.week_pool`). A new session takes its
+    share of that by weight, which is intensity times length (`share_week`), and the week's other sessions keep
+    their proportions to each other and give up the rest, so the week adds up exactly. Beyond the usual number
+    of sessions the load is only shared, never grown, and a week that already holds more is never cut down.
+    Sessions already done or missed have used up their part (`WEEK_FULL`, 409, when nothing is left; the
+    athlete can still log the workout as an extra one). It is the mirror of removing a session, which spreads
+    its points over the rest of the week.
+  - *Changing a session* (activity, intensity, length) works in place on a planned, accepted or moved session of
+    the active plan. Only a different intensity or length changes its share, and then the week's total stays what
+    it was. Its status is kept. Changing the day is the existing move.
+  - *Adapt and Replace rebuild the weeks still to come*, so sessions planned or moved by hand in them are rebuilt
+    with the rest (the Plan tab says so). Keeping them would need a marker on the session row (a migration).
+  - Tests: `test_training_manual_planning.py` (and the new cases in `test_training_planner.py`,
+    `test_training_rules.py`, `test_training_api.py`). The Python rules and their TypeScript copies in
+    `frontend/lib/training/mock-plan.ts` and `rules.ts` were also run against each other on 13,000 random cases
+    with no difference (the check isn't part of the repo), and the constants they share are pinned by a test.
+- **How fast a plan builds up is worked out from the athlete's own training, not a fixed 5%** (`forecast.py`,
+  `GET /training/plan/forecast`, the "Load forecast" card on the Plan tab). Plain Python, no new dependency. In order:
+  1. *The weekly load*: the points completed in each whole week before this one, up to `window_weeks` (12) back; a
+     week inside that stretch with nothing logged counts as zero. Strava rows never count (Hard Rule 1) and neither
+     does anything that was only planned (Rule 3).
+  2. *The trend*: Holt's damped-trend exponential smoothing gives the athlete's current weekly level and trend. Its
+     two smoothing constants are not fixed: for each athlete, the pair from `alpha_grid` x `beta_grid` that forecast
+     their own earlier weeks best is the one used. The trend, as a percent of the level, is their own rate of change.
+  3. *The track record*: a walk-forward test (fit on the weeks so far, predict the next, repeat) scores that forecast
+     on the athlete's own history against two plain guesses, "the same as last week" and "the average of the last
+     four weeks". The trend keeps its whole say if it did at least as well as the better guess (within
+     `trust_full_ratio`), none of it once its average miss is `trust_none_ratio` times the guess's or more, and a
+     proportional share in between. A noisy history usually earns it little or nothing, which is the point: the
+     forecast has to beat a plain guess on that athlete's data before it moves the plan.
+  4. *The blend*: trend and standard rate are mixed, the trend's weight being `weeks / (weeks + prior_weeks)` times
+     its track record. More weeks of data and a better record give it more of the say, and what it loses goes back
+     to the standard 5%.
+  5. *Plan completion and recent load*: the blend is scaled by the share of the planned load actually done over
+     the last `adherence_window_weeks` (4) whole weeks (nothing at 60% or less, in full at 90%), held at 0 while the
+     athlete's acute:chronic load ratio is above the readiness range (`READINESS_RULES.acwr_high`), and kept between
+     `rate_min_pct` and `rate_max_pct` (0% to 8%, under the plan's own 10% limit).
+  6. With fewer than `min_weeks` (6) whole weeks of the athlete's own training there is nothing to fit: the standard
+     rate stands, still scaled by completion and held by the load ratio.
+
+  The rate goes into `planner.weekly_targets` and is stored on the plan (`progression_pct`), so any week's target
+  (`planner.plan_week_target`, which the hand-planning rules use) is rebuilt from the same baseline and rate. The
+  plan's safety check is still the last word: a learned rate it would reject is replaced by the standard one, and if
+  that fails too no plan is saved. Adapting a plan uses today's forecast and says so in its reason when the rate
+  changed. The API returns the steps in plain words (history, trend, record, blend, completion, load, limits, rate),
+  which is what the card lists, along with the chart's weekly history, the model's one-week-ahead predictions, the
+  next four weeks with an 80% band, and the back-test numbers. Every number is in `config.ForecastRules`.
+  - *Private and safe:* the view is the owner's own and carries no readiness score, check-in or sleep, only the
+    acute:chronic load ratio. It reads logged workouts and planned sessions, nothing else.
+  - *Needs the progression migration to be stored* (see "Turning it on"); the forecast itself needs nothing.
+  - *Tests:* `test_training_forecast.py` (the series, the smoothing against a hand-worked example, the back-test,
+    the track record, completion, the rate, the plan it ends up in, the API's fields against the frontend's types,
+    and the frontend's copy of the settings). 55 deliberate breakages of this code were each caught. Its TypeScript
+    copy `frontend/lib/training/forecast.ts` (the copy the fixtures run) was compared with the Python on 1,500
+    random histories (Strava logs included, some of them carrying a planned session's id), 675 of them again with the
+    load ratio set to land on the edges of its ranges, and 4,000 synthetic back-tests (view, wording and plan targets:
+    no difference; that check isn't part of the repo). 22 of 24 deliberate breakages of the copy were caught; the
+    other two can't show up in the fixtures (a guard that JavaScript's division by zero makes redundant, and a branch
+    the fixed settings never reach).
+  - *Limits, to say plainly:* it models one thing, the athlete's weekly load, so it can't know about injury, travel
+    or an exam week; it needs 6 whole weeks of the athlete's own logged training before it fits anything (accounts
+    with less show "n of 6 weeks" and get the standard rate); and it is a planning aid, not medical advice.
+- **The daily check-in feeds readiness.** The check-in rating is `daily_checkins.muscle_fatigue` from
+  the gamification questionnaire ("How sore are your muscles?", 1 "Fresh" to 5 "Very sore", so higher
+  is worse, the same direction as the score expects). Only that column and the date are read, only for the
+  user, and never mood or diet. A check-in counts while it is from today or yesterday
+  (`checkin_max_age_days`); an older one is ignored. If the table isn't in the database, readiness runs
+  without it and one warning is logged.
+- **The profile sets the starting volume, never overrides history.** With under
+  `min_history_weeks_for_baseline` weeks of logged training, the baseline starts from the user's
+  `activity_level` (`config.default_baseline_by_activity_level`), so a sedentary beginner isn't given
+  the same first week as an athlete. With enough history the logged volume is used and the profile is
+  ignored. The plan's adaptation note says when the activity level set the default.
+- **Only `users.activity_level` and `users.fitness_goal` are read from the profile table**, because that
+  table also holds the Strava tokens and a password hash. If the table or a column isn't there yet, a
+  warning is logged and the plain defaults are used; any other database error still fails the request.
+- **The profile goal tilts the activity mix and nothing else.** Settings stores the goal as `DEFICIT`,
+  `MAINTAIN` or `SURPLUS` (a fixed dropdown), which becomes `lose_weight`, `maintain` or `build_muscle`
+  (`config.profile_goal_map`). Weight loss gives run and cycling an extra turn in the weekly rotation of
+  activities, muscle gain gives gym and bodyweight one (`config.goal_activity_weights`); maintenance, no
+  goal, or a value Settings doesn't offer leaves the user's own list as it is. Only activities the user
+  picked are ever used, and the goal never changes when sessions fall or how hard they are. The plan stores
+  the goal it was built for (`goal`), and adapting a plan re-reads the profile.
+- **Exam dates are entered on the training page.** Settings has no exam field, so the user adds them in
+  their training preferences (up to 10, within `exam_dates_horizon_days`; kept in order, and a date that
+  has passed is dropped on save). `days_until_next_exam` takes the nearest one that hasn't passed. Inside
+  `exam_window_days` of it the score drops, up to `exam_max_penalty`, and the "Academic load" factor says
+  how many days are left. If Settings ever ships an exam date, read it where
+  `TrainingService._readiness` reads `preferences.exam_dates`. Until the migration that adds the column
+  (`20261007120000_training_inputs.sql`) is applied, saving a date is refused with a 503 that says so, rather
+  than saving the form and quietly losing the date; a form with no dates still saves.
+- **Sleep is entered on the Today card, once a day.** Nothing else records it. It is stored per user and
+  day in `training_sleep_logs` and only the entry for the day being scored counts. It is the
+  `sleep_hours` feature, and it wins over a check-in's own sleep answer if one ever carries one.
+  Saving it again replaces it; the cached score is keyed on its inputs, so the next read recomputes.
+- **A logged workout earns leaderboard XP.** Once a workout is saved (a planned session or an ad hoc one), the
+  service calls the gamification feature's `award_xp(…, "workout", XP_REWARDS["workout"], workout_id)`. The
+  workout's id is the `source_id`, so a retry counts once, and only that id goes across, never what was logged.
+  It is best effort: the workout is already saved, so any failure is logged and the log still succeeds, and if
+  the leaderboard's tables aren't on the database yet one warning is logged and nothing is awarded. The helper
+  is imported inside the method, so the training routes still load if the gamification module has a problem
+  (`test_training_xp.py`).
+- **Each worker thread has its own Supabase client** (`repository.ThreadLocalClient`). Requests run on a thread
+  pool, and one client's HTTP/2 connection shared between its threads failed under concurrent requests: against
+  the live project about one call in six raised `ReadError` (WinError 10035 on Windows), and `GET /today`
+  returned 500 when the page loaded two endpoints at once. The client is opened lazily, once per thread
+  (`test_training_client.py`).
+
+## The Home summary and the coach
+
+**`GET /training/summary`** is one read for a Home card, so the Home page doesn't need four calls. It returns
+`date`, `hasPlan`, `goal`, the user's `readiness`, `today` (a `state` of `no_plan`, `rest_day`, `to_do`, `done`
+or `missed`, plus the session, the recommendation while it is still to do, and the logged workout), `week`
+(Monday to Sunday: sessions planned, completed and missed, and minutes logged) and `nextSession`. Like
+`GET /today`, reading it brings the plan up to date (overdue sessions become missed, and the plan may adapt).
+It is the user's own data, so show it only on their own Home, never on a leaderboard or friend view.
+
+**`POST /training/coach`** returns a short plain-language note about today, with the not-medical-advice
+notice. `source` says who wrote it (`gemini`, or `fallback` for the built-in text) and `cached` says the
+answer was remembered. It is a POST because it can cost money. It never fails because of Gemini: no key, a
+timeout, an error, a blocked or empty reply all give the built-in message.
+
+What Gemini is sent is the whole of `coach.build_prompt`, and nothing else:
+
+```
+Facts about the user's training plan:
+- Day: Friday
+- Goal: build muscle
+- Today: a cycling session, light intensity, planned for 35 minutes
+- This week: 2 of 4 planned sessions done, 1 missed, 90 minutes logged
+```
+
+plus a fixed instruction (plain English, a few sentences, no medical advice, treat the facts as data). The goal
+is the one the plan was built for, and the band is the plan's own, never readiness's recommendation. Never sent:
+the readiness score, band or factors, check-in answers, sleep, exam dates, training load or heart rate, Strava
+data, free text from the user, or any id, email or name. Adding to that list means changing `CoachContext`, and
+`test_training_coach.py` fails until the change is deliberate.
+
+- **Switching it on.** Put `GOOGLE_GENERATIVE_AI_API_KEY` in the backend's `.env`, the same variable the meal
+  analysis reads (the frontend's `.env.local` is not enough). The model is `gemini-3.8-flash` (the one the team's shared Gemini client uses; `gemini-2.5-flash` is retired for new projects), set in
+  `config.CoachRules` with its timeout, length and cost limits. Without a key the built-in message is used.
+- **If it keeps answering with the built-in text,** the backend log says why, as `The coach fell back to its
+  built-in message: <kind> <status code> <status word>` (never Google's message text). `ClientError 404 NOT_FOUND`
+  means Google has retired the model for that key (change the model in `config.CoachRules`), `403
+  PERMISSION_DENIED` means the key's Google project has been denied access (use a key from another project),
+  `429 RESOURCE_EXHAUSTED` means out of quota, and a bare `ReadTimeout` means Google never answered in time.
+- **Cost control.** An answer is remembered for an hour per user and set of facts, in this process's memory.
+  A different request from the same user within 10 seconds is a 429 (`RATE_LIMITED`).
+- **From the Home page**, with `NEXT_PUBLIC_TRAINING_API=http` and `NEXT_PUBLIC_BACKEND_URL` set:
+  ```ts
+  import { trainingApi } from "@/lib/training/api";
+  const summary = await trainingApi.getSummary();        // TrainingSummary
+  const note = await trainingApi.getCoachMessage();      // ApiResult<CoachMessage>
+  ```
+  Without the flag the same calls return fixtures, so the Home card can be built before the backend is running.
+
+## The Strava tab
+
+The training page's **Strava** tab pulls the athlete's latest activities from Strava, shows each as a card, and
+saves the ones the athlete chooses to their **schedule** as training logs.
+
+1. **Upload Strava data** calls `POST /training/strava/pull`. The server asks Strava for the athlete's latest 100
+   activities through the team's Strava service (which renews an expired access token itself) and answers with
+   one card each: name, type, day and time, distance, moving time, climb, average heart rate and, for the
+   activities the schedule can hold, how they would be saved (type, minutes, points). **Nothing is saved yet.**
+   Opening the tab only asks `GET /training/strava/status` (our own database), so Strava is asked when the athlete
+   presses the button and not before.
+2. **Save to schedule** on a card, or **Save all to schedule**, calls `POST /training/strava/save` with the
+   activity ids. The server asks Strava again and saves what Strava says about those ids, never what a browser
+   sends, so a forged duration can't be saved. Each becomes a `training_workout_logs` row with `source = 'strava'`
+   and `external_id` = the Strava activity id. Saving the same activity twice does nothing (a unique index on
+   `(user_id, source, external_id)` and "ignore duplicates"), and the answer counts the ones saved, the ones that
+   were already there and the ones skipped (no longer among Strava's latest, or with nowhere to go).
+3. The log then shows on the **Schedule** tab, marked "From Strava" with a "View on Strava" link.
+4. **Remove saved activities** (`DELETE /training/strava/logs`) takes every Strava-sourced log off again. The
+   athlete's own logs are never touched. Disconnecting Strava in Settings clears the connection but not the saved
+   logs (that route is the team's); the tab says so and offers the removal.
+
+- **How an activity is saved.** The schedule holds four kinds of training, so only those can be saved: `Run`,
+  `TrailRun` and `VirtualRun` are a run; `Ride`, `VirtualRide`, `EBikeRide`, `MountainBikeRide`,
+  `EMountainBikeRide` and `GravelRide` are cycling; `WeightTraining` is gym; `Workout`, `Crossfit` and
+  `HighIntensityIntervalTraining` are bodyweight. Walks, swims, hikes, yoga and the rest are listed, with a note
+  that they can't be saved. The duration is the moving time rounded to the minute (at most 600). **Points** are
+  the schedule's own load unit, which has no fixed link to minutes; a Strava log gets 1 point per minute
+  (`config.TrainingRules.strava_points_per_minute`), capped at the volume limit. Average heart rate is kept only
+  when it is a believable number (30 to 230). The distance is kept in `distance_m` (metres) for the leaderboard's
+  running mileage (`20261011200000_training_strava_distance.sql`). A run or ride logged by hand can carry one too:
+  the Log workout form's optional "Distance, km" (`LogWorkoutInput.distance_km`, at most
+  `config.TrainingRules.workout_distance_km_max`), written by `training_apply_changes` since
+  `20261012000000_training_logs_distance.sql`. Like calories, the repository asks `training_schema_features()` before
+  writing one, so a distance is refused rather than dropped on a database without that migration. Pace, climb, the
+  name and the route are **not** kept: a card shows them, the log doesn't. The date is the day it happened where the
+  athlete was.
+- **Hard Rule 1 still holds: a Strava log is shown on the schedule and reaches no AI feature.** The one other
+  reader is the leaderboard (gamification), which sums `distance_m` of saved runs for its mileage view; it is not
+  an AI feature and reads nothing else from the log. Within training, a Strava log counts towards nothing. It is
+  flagged `source = 'strava'` and every calculation drops those rows before it counts anything: the readiness
+  features (`readiness.build_features`), the plan baseline and adaptation (`planner.modelling_workouts`), the
+  summary and the coach (which use `modelling_workouts` too). It is never linked to a planned session, so it
+  can't mark one done, and saving it awards no XP: the training routes don't call the XP code for it, and the
+  database trigger that pays XP for rows inserted into `training_workout_logs` skips `source = 'strava'` since
+  the fourth migration. `test_training_strava_isolation.py` fails if a later migration redefines that function
+  without the guard. The schedule is the only place that reads them back. `test_training_strava_isolation.py`
+  proves it by behaviour (40 saved Strava logs change nothing the plan, readiness, summary or coach say, the
+  schedule still shows them, and one never completes a session) and by imports (only `strava_sync.py` and its
+  router touch Strava code or write a Strava log; the tab's frontend files import a short fixed list and never
+  the training API client). If the rule is ever relaxed, that is a decision to amend the rule first.
+- **Failures:** not connected is a 409 `NOT_CONNECTED`; Strava refusing the saved connection (revoked access) is
+  the same with a message that points to Settings; a rate limit is a 429; an outage or a reply that isn't what
+  Strava documents is a 503. Nothing is saved when Strava failed. A database without the third migration is a 503
+  on save that says to apply it. Every save asks Strava once (one request for the latest 100), so pressing
+  "Save to schedule" on many cards one by one uses more of Strava's rate limit than one "Save all".
+- **Not connected:** the tab shows "Connect Strava", a link to Strava's consent page built from
+  `NEXT_PUBLIC_STRAVA_CLIENT_ID` and `NEXT_PUBLIC_STRAVA_REDIRECT_URI`, with `state=training`. Once the athlete
+  allows it, Strava sends them to `frontend/app/api/auth/callback/route.ts`, which swaps the code for tokens
+  through `POST /strava/exchange` (stored on the user's row) and returns to the tab with a notice. With no
+  `state` it returns to Settings, as it always did. That route had been deleted from `main`; it is back.
+- **Where the code is:** `strava_sync.py` and `strava_router.py` here; `lib/training/strava.ts` (the requests and
+  the connect link), `lib/training/strava-format.ts` (plain functions that read and word the answers) and
+  `_components/strava-panel.tsx` on the page; the schedule's "From Strava" badge is in `schedule-panel.tsx`.
+- Like the rest of the page's live data, the tab needs `NEXT_PUBLIC_TRAINING_API=http` and a signed-in user.
+
+## Not built yet, and who it depends on
+
+- **Keeping hand-planned sessions through Adapt and Replace.** They are rebuilt with the weeks still to come
+  (see "Planning the schedule by hand"). Telling them apart from generated ones needs a marker column on
+  `planned_sessions`, which is a migration, and the generator would have to plan around them.
+- **Drag and drop on the calendar, and swapping two sessions' days.** Moving is one session at a time through
+  the Move dialog.
+- **Resting heart rate.** The spec lists resting and average heart rate. Nothing in the app records a
+  resting rate (the check-in has no such question and a logged workout carries its average only), so the
+  heart rate factor is the trend in average heart rate across logged sessions. Entering a resting rate
+  would work the way sleep does, plus a model feature and a retrain.
+- **Mood and diet answers.** The check-in collects them but readiness doesn't use them. Using them means
+  new model features and retraining, and they are the user's most personal answers.
+- **Exam load in the plan.** An exam lowers that day's readiness, so a planned hard session is dialled
+  down by the usual reconciliation, but the weekly plan itself isn't eased around exams.
+- **`activities.source`.** The dashboard's `activities` table is Strava-only and has no `source`
+  column, so it is deliberately not read.
+- **A model trained on real data.** Stage 2 exists (`ml/`), but it is trained on a synthetic cohort
+  labelled by the rules, so it reproduces them and is no more accurate. It needs real labelled
+  readiness data to be anything more; `ml/README.md` says how to retrain on it.

@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import os
@@ -409,7 +410,8 @@ async def test_gemini_request_serializes_with_real_sdk(monkeypatch):
     assert "maxItems" not in schema["properties"]["items"]
     assert "additionalProperties" not in schema
     assert "maxLength" not in schema["properties"]["meal_name"]
-    assert requests[0]["contents"][0]["parts"][0]["inlineData"]["mimeType"] == "image/jpeg"
+    image_part = requests[0]["contents"][0]["parts"][0]["inlineData"]
+    assert image_part.get("mimeType", image_part.get("mime_type")) == "image/jpeg"
 
 
 @pytest.mark.asyncio
@@ -433,6 +435,7 @@ async def test_gemini_request_serializes_with_real_sdk(monkeypatch):
     ],
 )
 async def test_gemini_response_handling(monkeypatch, scenario, expected):
+    monkeypatch.setattr(nutrition.asyncio, "sleep", AsyncMock())
     data = payload()
     estimate = {
         key: data[key]
@@ -496,6 +499,9 @@ async def test_gemini_response_handling(monkeypatch, scenario, expected):
         assert result.total_calories == 195
         assert result.protein_g == 4
         assert generate.call_args.kwargs["model"] == "fixture-model"
+    assert generate.await_count == (
+        3 if scenario in {"timeout", "quota", "unavailable"} else 1
+    )
 
 
 def test_shared_schema_missing_activities_keeps_meals_available(client, monkeypatch):
@@ -602,3 +608,125 @@ def test_calendar_requires_authentication():
     with TestClient(app) as api:
         assert api.get('/api/nutrition/calendar?start_date=2026-10-11&end_date=2026-10-17').status_code in (401, 403)
         assert api.put('/api/nutrition/targets', json={'targets': [{'date': '2026-10-11', 'target_calories': 2200}]}).status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [429, 500, 502, 503, 504, "timeout", "network"])
+async def test_analysis_recovers_from_transient_failure(monkeypatch, failure):
+    data = payload()
+    estimate = {
+        key: data[key]
+        for key in ("meal_name", "confidence_score", "training_context_note", "items")
+    }
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if len(requests) == 1:
+            if failure == "timeout":
+                raise httpx.ReadTimeout("slow", request=request)
+            if failure == "network":
+                raise httpx.ConnectError("offline", request=request)
+            return httpx.Response(failure, json={"error": {"message": "busy"}})
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": json.dumps(estimate)}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ]
+            },
+        )
+
+    factory = nutrition.genai.Client
+    sleep = AsyncMock()
+    monkeypatch.setattr(nutrition.asyncio, "sleep", sleep)
+    monkeypatch.setattr(
+        nutrition,
+        "get_settings",
+        lambda: SimpleNamespace(
+            GOOGLE_GENERATIVE_AI_API_KEY="fixture-key",
+            GEMINI_NUTRITION_MODEL="fixture-model",
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+
+        def make_client(**kwargs):
+            kwargs["http_options"].httpx_async_client = http_client
+            return factory(**kwargs)
+
+        monkeypatch.setattr(nutrition.genai, "Client", make_client)
+        result = await nutrition.analyze_image(image_bytes(), "after run")
+    assert result.total_calories == 195
+    assert len(requests) == 2
+    assert sleep.await_count == 1
+    assert 1 <= sleep.call_args.args[0] <= 1.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode", ["retry_header", "retry_info", "long_cooldown", "deadline", "cancel"]
+)
+async def test_analysis_respects_cooldowns_deadline_and_cancellation(monkeypatch, mode):
+    response = (
+        httpx.Response(429, headers={"Retry-After": "5"})
+        if mode == "retry_header"
+        else None
+    )
+    details = {
+        "error": {
+            "message": "busy",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                    "retryDelay": "120s" if mode == "long_cooldown" else "5s",
+                }
+            ],
+        }
+    }
+    generate = AsyncMock(side_effect=nutrition.errors.APIError(429, details, response))
+    if mode == "cancel":
+        generate.side_effect = asyncio.CancelledError()
+    if mode == "deadline":
+
+        async def hang(**kwargs):
+            await asyncio.Event().wait()
+
+        generate.side_effect = hang
+        monkeypatch.setattr(nutrition, "ANALYSIS_TIMEOUT_SECONDS", 0.01)
+    sleep = AsyncMock()
+    monkeypatch.setattr(nutrition.asyncio, "sleep", sleep)
+    client = AsyncMock()
+    client.__aenter__.return_value = SimpleNamespace(
+        models=SimpleNamespace(generate_content=generate)
+    )
+    monkeypatch.setattr(
+        nutrition.genai, "Client", lambda **kwargs: SimpleNamespace(aio=client)
+    )
+    monkeypatch.setattr(
+        nutrition,
+        "get_settings",
+        lambda: SimpleNamespace(
+            GOOGLE_GENERATIVE_AI_API_KEY="fixture-key",
+            GEMINI_NUTRITION_MODEL="fixture-model",
+        ),
+    )
+    if mode == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await nutrition.analyze_image(image_bytes(), "")
+    else:
+        with pytest.raises(HTTPException) as error:
+            await nutrition.analyze_image(image_bytes(), "")
+        assert error.value.status_code == (504 if mode == "deadline" else 429)
+    assert client.__aexit__.await_count == 1
+    if mode in {"retry_header", "retry_info"}:
+        assert generate.await_count == 3
+        assert [call.args[0] for call in sleep.call_args_list] == [5, 5]
+    else:
+        assert generate.await_count == 1
+        sleep.assert_not_awaited()

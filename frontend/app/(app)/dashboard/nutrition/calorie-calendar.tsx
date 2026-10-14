@@ -98,7 +98,7 @@ export default function CalorieCalendar({ selectedDay, onSelectDay, revision }: 
               <p className="mt-5 text-xs text-slate-400">{future ? "Available to eat" : "Consumed"}</p>
               <p className="mt-1 text-2xl font-semibold tabular-nums">{loading ? "…" : (future ? target : consumed)?.toLocaleString() ?? "—"}</p>
               <p className="mt-3 text-xs text-slate-400">{loading ? "Loading…" : target === null ? "Target not set" : `${target.toLocaleString()} target`}</p>
-              <p className="mt-2 min-h-8 text-xs text-emerald-300">{loading ? "" : future ? "Planned daily budget" : entry?.meal_count === 0 ? "No meals logged" : consumed === null ? "Intake incomplete" : remaining === null ? "Logged intake" : `${Math.abs(remaining).toLocaleString()} ${remaining < 0 ? "over target" : "remaining"}`}</p>
+              <p className="mt-2 min-h-8 text-xs text-emerald-300">{loading ? "" : future ? "Daily calorie count" : entry?.meal_count === 0 ? "No meals logged" : consumed === null ? "Intake incomplete" : remaining === null ? "Logged intake" : `${Math.abs(remaining).toLocaleString()} ${remaining < 0 ? "over target" : "remaining"}`}</p>
               <p className="mt-2 text-[10px] text-slate-500">{entry?.target_source === "saved" ? "Saved target" : entry?.target_source === "profile" ? "Profile estimate" : ""}</p>
             </button>;
           })}
