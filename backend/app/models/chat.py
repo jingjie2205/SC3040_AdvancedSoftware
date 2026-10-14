@@ -1,8 +1,7 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
-
 
 class SessionCreate(BaseModel):
     pass
@@ -22,17 +21,15 @@ class MessageCreate(BaseModel):
 
 
 class MessageResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    message_id: UUID
-    session_id: UUID
+    message_id: str
+    session_id: str
     sender: str
     content: str
-    timestamp: datetime
-    has_health_flag: bool = False
-    planned_session: Optional[Dict[str, Any]] = None
+    timestamp: str
+    has_health_flag: Optional[bool] = False
+    planned_session: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None
     recommended_session: Optional[Dict[str, Any]] = None
-    workout_plan: Optional[Dict[str, Any]] = None
+    recommended_sessions: Optional[List[Dict[str, Any]]] = None
     nutrition_plan: Optional[Dict[str, Any]] = None
     nutrition_schedule: Optional[List[Dict[str, Any]]] = None
     weekly_training_plan: Optional[List[Dict[str, Any]]] = None
@@ -45,6 +42,7 @@ class SessionDetailResponse(BaseModel):
     user_id: UUID
     started_at: datetime
     messages: List[MessageResponse] = []
+
 
 MessageResponse.model_rebuild()
 SessionDetailResponse.model_rebuild()

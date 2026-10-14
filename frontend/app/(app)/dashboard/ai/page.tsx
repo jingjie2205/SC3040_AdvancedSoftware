@@ -108,8 +108,23 @@ export default function AIAssistancePage() {
       const parsedMessages: Message[] = (detail.messages || []).map(
         (m: ApiMessage) => {
           const raw = m as any;
-          const plannedSession: RecommendedPlannedSession | null =
-            raw.planned_session || raw.recommended_session || null;
+          
+          // --- UPDATE THIS SECTION ---
+          let recommendedSessions: RecommendedPlannedSession[] = [];
+
+          if (Array.isArray(raw.planned_session)) {
+            recommendedSessions = raw.planned_session;
+          } else if (Array.isArray(raw.recommended_sessions)) {
+            recommendedSessions = raw.recommended_sessions;
+          } else if (raw.planned_session) {
+            recommendedSessions = [raw.planned_session];
+          } else if (raw.recommended_session) {
+            recommendedSessions = [raw.recommended_session];
+          }
+
+          const primarySession: RecommendedPlannedSession | null =
+            recommendedSessions.length > 0 ? recommendedSessions[0] : null;
+          // ----------------------------
 
           return {
             id: m.message_id,
@@ -119,8 +134,9 @@ export default function AIAssistancePage() {
               hour: "2-digit",
               minute: "2-digit",
             }),
-            hasPlannedSession: Boolean(plannedSession),
-            plannedSession,
+            hasPlannedSession: recommendedSessions.length > 0,
+            plannedSession: primarySession,
+            recommendedSessions,
             hasNutritionPlan: Boolean(raw.nutrition_plan),
             nutritionPlan: raw.nutrition_plan || null,
             nutritionSchedule: raw.nutrition_schedule || null,
@@ -227,8 +243,19 @@ export default function AIAssistancePage() {
           promptText,
         );
 
-      const receivedSession: RecommendedPlannedSession | null =
-        rawReply.planned_session || rawReply.recommended_session || null;
+      // Extract recommended sessions array
+      const receivedSessions: RecommendedPlannedSession[] =
+        rawReply.recommended_sessions && rawReply.recommended_sessions.length > 0
+          ? rawReply.recommended_sessions
+          : rawReply.planned_session
+          ? [rawReply.planned_session]
+          : rawReply.recommended_session
+          ? [rawReply.recommended_session]
+          : [];
+
+      const primarySession: RecommendedPlannedSession | null =
+        receivedSessions.length > 0 ? receivedSessions[0] : null;
+
       const receivedNutrition = rawReply.nutrition_plan || null;
       const receivedWeeklyPlan: WeeklyTrainingDay[] | null =
         rawReply.weekly_training_plan ||
@@ -256,7 +283,7 @@ export default function AIAssistancePage() {
             })
           : null);
 
-      if (receivedSession) setActivePlannedSession(receivedSession);
+      if (primarySession) setActivePlannedSession(primarySession);
       if (receivedNutrition) setNutritionPlan(receivedNutrition);
 
       const assistantMessage: Message = {
@@ -267,8 +294,9 @@ export default function AIAssistancePage() {
           hour: "2-digit",
           minute: "2-digit",
         }),
-        hasPlannedSession: Boolean(receivedSession),
-        plannedSession: receivedSession,
+        hasPlannedSession: receivedSessions.length > 0,
+        plannedSession: primarySession,
+        recommendedSessions: receivedSessions,
         hasNutritionPlan: Boolean(receivedNutrition),
         nutritionPlan: receivedNutrition,
         nutritionSchedule: rawReply.nutrition_schedule || null,

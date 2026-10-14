@@ -112,8 +112,7 @@ async def get_chat_history(session_id: UUID, user_id: str = Depends(get_current_
             supabase.table("chat_messages")
             .select(
                 "message_id, session_id, sender, content, timestamp, has_health_flag, "
-                "planned_session, nutrition_plan, nutrition_schedule"
-                ", weekly_training_plan"
+                "planned_session, nutrition_plan, nutrition_schedule, weekly_training_plan"
             )
             .eq("session_id", str(session_id))
             .order("timestamp", desc=False)
@@ -127,6 +126,18 @@ async def get_chat_history(session_id: UUID, user_id: str = Depends(get_current_
 
     for m in messages:
         m["sender"] = to_frontend_sender(m.get("sender", ""))
+        
+        # Handle list vs dict in planned_session:
+        raw_planned = m.get("planned_session")
+        if isinstance(raw_planned, list):
+            m["recommended_sessions"] = raw_planned
+            m["planned_session"] = raw_planned[0] if raw_planned else None
+        elif isinstance(raw_planned, dict):
+            m["recommended_sessions"] = [raw_planned]
+            m["planned_session"] = raw_planned
+        else:
+            m["recommended_sessions"] = []
+
     session_data["messages"] = messages
     return session_data
 
@@ -198,7 +209,16 @@ async def send_chat_message(
     )
 
     reply_text = ai_result.get("reply") or "I processed your request."
+    
+    # Extract multiple sessions list
+    recommended_sessions = ai_result.get("recommended_sessions") or []
     planned_session = ai_result.get("recommended_session") or ai_result.get("planned_session")
+
+    if not recommended_sessions and planned_session:
+        recommended_sessions = [planned_session]
+    elif not planned_session and recommended_sessions:
+        planned_session = recommended_sessions[0]
+
     nutrition_plan = ai_result.get("nutrition_plan")
     nutrition_schedule = ai_result.get("nutrition_schedule")
     weekly_training_plan = ai_result.get("weekly_training_plan")
@@ -207,23 +227,23 @@ async def send_chat_message(
     now_iso = datetime.now(timezone.utc).isoformat()
 
     def _persist_ai():
+        persisted_session_data = recommended_sessions if len(recommended_sessions) > 1 else planned_session
+
         ai_payload = {
             "session_id": str(session_id),
             "sender": "AI",
             "content": reply_text,
             "timestamp": now_iso,
             "has_health_flag": is_health_flag,
-            "planned_session": planned_session,
+            "planned_session": persisted_session_data,  # Stores [run, gym]
             "nutrition_plan": nutrition_plan,
             "nutrition_schedule": nutrition_schedule,
             "weekly_training_plan": weekly_training_plan,
         }
-        # Note the .select() chained here to guarantee PostgREST returns representation
         return supabase.table("chat_messages").insert(ai_payload).select().execute()
 
     ai_res = await run_in_threadpool(_persist_ai)
     
-    # If Supabase returns representation, use its message_id; otherwise fall back
     if ai_res.data and len(ai_res.data) > 0:
         row = ai_res.data[0]
         msg_id = row.get("message_id")
@@ -242,6 +262,7 @@ async def send_chat_message(
         "has_health_flag": is_health_flag,
         "planned_session": planned_session,
         "recommended_session": planned_session,
+        "recommended_sessions": recommended_sessions,
         "nutrition_plan": nutrition_plan,
         "nutrition_schedule": nutrition_schedule,
         "weekly_training_plan": weekly_training_plan,

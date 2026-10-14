@@ -62,6 +62,7 @@ export interface Message {
   timestamp: string;
   hasPlannedSession?: boolean;
   plannedSession?: RecommendedPlannedSession | null;
+  recommendedSessions?: RecommendedPlannedSession[] | null;
   hasNutritionPlan?: boolean;
   nutritionPlan?: any;
   nutritionSchedule?: NutritionScheduleDay[] | null;

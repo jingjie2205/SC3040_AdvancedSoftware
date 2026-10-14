@@ -177,149 +177,163 @@ export function ChatPanel({
 
       {/* Message List */}
       <div className="flex-1 overflow-y-auto p-6 space-y-5">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex gap-3.5 max-w-[88%] ${
-              msg.role === "user" ? "ml-auto flex-row-reverse" : "mr-auto"
-            }`}
-          >
+        {messages.map((msg) => {
+          // Resolve list of recommended sessions: prioritize recommendedSessions, fall back to plannedSession
+          const sessionsToRender: RecommendedPlannedSession[] =
+            msg.recommendedSessions && msg.recommendedSessions.length > 0
+              ? msg.recommendedSessions
+              : msg.plannedSession
+              ? [msg.plannedSession]
+              : [];
+
+          return (
             <div
-              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                msg.role === "assistant"
-                  ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
-                  : "bg-slate-800 border border-slate-700 text-slate-200"
+              key={msg.id}
+              className={`flex gap-3.5 max-w-[88%] ${
+                msg.role === "user" ? "ml-auto flex-row-reverse" : "mr-auto"
               }`}
             >
-              {msg.role === "assistant" ? (
-                <Bot className="w-4 h-4" />
-              ) : (
-                <User className="w-4 h-4" />
-              )}
-            </div>
-
-            <div className="flex flex-col gap-2 max-w-full">
-              {/* Message Bubble */}
               <div
-                className={`rounded-2xl px-4 py-3.5 text-sm leading-relaxed ${
-                  msg.role === "user"
-                    ? "bg-emerald-600 text-white font-medium rounded-tr-none"
-                    : "bg-[#0F182A] border border-slate-800 text-slate-200 rounded-tl-none shadow-sm whitespace-pre-wrap"
+                className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                  msg.role === "assistant"
+                    ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
+                    : "bg-slate-800 border border-slate-700 text-slate-200"
                 }`}
               >
-                {msg.content}
-                <div
-                  className={`mt-1.5 text-[10px] ${
-                    msg.role === "user"
-                      ? "text-emerald-200/80 text-right"
-                      : "text-slate-400"
-                  }`}
-                >
-                  {msg.timestamp}
-                </div>
+                {msg.role === "assistant" ? (
+                  <Bot className="w-4 h-4" />
+                ) : (
+                  <User className="w-4 h-4" />
+                )}
               </div>
 
-              {/* Planned Session Recommendation Card */}
-              {msg.role === "assistant" && msg.plannedSession && (
-                <PlannedSessionCard
-                  session={msg.plannedSession}
-                  onReview={onOpenPlannedSessionModal}
-                />
-              )}
-
-              {/* Optional Nutrition Plan Trigger */}
-              {msg.role === "assistant" &&
-                msg.hasNutritionPlan &&
-                onOpenNutritionModal && (
-                  <div className="pt-1 pl-1">
-                    <button
-                      type="button"
-                      onClick={() => onOpenNutritionModal(msg.nutritionPlan)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 transition-colors"
-                    >
-                      <Utensils className="w-3.5 h-3.5" />
-                      Review Nutrition Plan
-                    </button>
+              <div className="flex flex-col gap-2 max-w-full">
+                {/* Message Bubble */}
+                <div
+                  className={`rounded-2xl px-4 py-3.5 text-sm leading-relaxed ${
+                    msg.role === "user"
+                      ? "bg-emerald-600 text-white font-medium rounded-tr-none"
+                      : "bg-[#0F182A] border border-slate-800 text-slate-200 rounded-tl-none shadow-sm whitespace-pre-wrap"
+                  }`}
+                >
+                  {msg.content}
+                  <div
+                    className={`mt-1.5 text-[10px] ${
+                      msg.role === "user"
+                        ? "text-emerald-200/80 text-right"
+                        : "text-slate-400"
+                    }`}
+                  >
+                    {msg.timestamp}
                   </div>
-                )}
+                </div>
 
-              {msg.role === "assistant" &&
-                msg.nutritionSchedule &&
-                msg.nutritionSchedule.length > 0 && (
-                  <div className="mt-1 overflow-hidden rounded-xl border border-cyan-500/30 bg-slate-900/90 shadow-lg shadow-cyan-950/20">
-                    <div className="flex items-center gap-2 border-b border-slate-800 px-4 py-3">
-                      <Utensils className="h-4 w-4 text-cyan-400" />
-                      <span className="text-xs font-semibold text-slate-100">
-                        Recommended daily calorie targets
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 text-xs">
-                      <div className="border-b border-slate-800 px-4 py-2 font-semibold text-slate-400">
-                        Activity
-                      </div>
-                      <div className="border-b border-l border-slate-800 px-4 py-2 text-right font-semibold text-slate-400">
-                        Target calories
-                      </div>
-                      {msg.nutritionSchedule.map((day) => (
-                        <React.Fragment key={day.date}>
-                          <div className="border-b border-slate-800 px-4 py-2.5 text-slate-200">
-                            <span className="capitalize">{day.activity}</span>
-                            <span className="ml-2 text-[10px] text-slate-500">
-                              {day.date}
-                            </span>
-                          </div>
-                          <div className="border-b border-l border-slate-800 px-4 py-2.5 text-right font-semibold tabular-nums text-cyan-300">
-                            {day.targetCalories.toLocaleString()} kcal
-                          </div>
-                        </React.Fragment>
-                      ))}
-                    </div>
-                    {onSaveNutritionSchedule && (
-                      <div className="border-t border-slate-800 p-3">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onSaveNutritionSchedule(
-                              msg.nutritionSchedule!,
-                              msg.id,
-                            )
-                          }
-                          disabled={savingNutritionMessageId === msg.id}
-                          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-cyan-400 px-3.5 py-2 text-xs font-semibold text-slate-950 transition-colors hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <Utensils className="h-3.5 w-3.5" />
-                          {savingNutritionMessageId === msg.id
-                            ? "Adding to nutritional plan..."
-                            : "Add to nutritional plan"}
-                        </button>
-                      </div>
-                    )}
-
-                  </div>
-                )}
-
-              {msg.role === "assistant" &&
-                msg.weeklyTrainingPlan &&
-                msg.weeklyTrainingPlan.length > 0 && (
-                  <div className="mt-1 space-y-2">
-                    <div className="flex items-center gap-2 px-1 pt-1">
-                      <Calendar className="h-4 w-4 text-emerald-400" />
-                      <span className="text-xs font-semibold text-slate-100">
-                        Weekly training plan
-                      </span>
-                    </div>
-                    {msg.weeklyTrainingPlan.map((day) => (
-                      <WeeklyTrainingCard
-                        key={day.date}
-                        day={day}
+                {/* Planned Sessions Recommendation Cards (Supports 2-a-day workouts) */}
+                {msg.role === "assistant" && sessionsToRender.length > 0 && (
+                  <div className="flex flex-col gap-2 mt-1">
+                    {sessionsToRender.map((session, idx) => (
+                      <PlannedSessionCard
+                        key={`${session.date}-${session.activity_type}-${idx}`}
+                        session={session}
                         onReview={onOpenPlannedSessionModal}
                       />
                     ))}
                   </div>
                 )}
+
+                {/* Optional Nutrition Plan Trigger */}
+                {msg.role === "assistant" &&
+                  msg.hasNutritionPlan &&
+                  onOpenNutritionModal && (
+                    <div className="pt-1 pl-1">
+                      <button
+                        type="button"
+                        onClick={() => onOpenNutritionModal(msg.nutritionPlan)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 transition-colors"
+                      >
+                        <Utensils className="w-3.5 h-3.5" />
+                        Review Nutrition Plan
+                      </button>
+                    </div>
+                  )}
+
+                {msg.role === "assistant" &&
+                  msg.nutritionSchedule &&
+                  msg.nutritionSchedule.length > 0 && (
+                    <div className="mt-1 overflow-hidden rounded-xl border border-cyan-500/30 bg-slate-900/90 shadow-lg shadow-cyan-950/20">
+                      <div className="flex items-center gap-2 border-b border-slate-800 px-4 py-3">
+                        <Utensils className="h-4 w-4 text-cyan-400" />
+                        <span className="text-xs font-semibold text-slate-100">
+                          Recommended daily calorie targets
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 text-xs">
+                        <div className="border-b border-slate-800 px-4 py-2 font-semibold text-slate-400">
+                          Activity
+                        </div>
+                        <div className="border-b border-l border-slate-800 px-4 py-2 text-right font-semibold text-slate-400">
+                          Target calories
+                        </div>
+                        {msg.nutritionSchedule.map((day) => (
+                          <React.Fragment key={day.date}>
+                            <div className="border-b border-slate-800 px-4 py-2.5 text-slate-200">
+                              <span className="capitalize">{day.activity}</span>
+                              <span className="ml-2 text-[10px] text-slate-500">
+                                {day.date}
+                              </span>
+                            </div>
+                            <div className="border-b border-l border-slate-800 px-4 py-2.5 text-right font-semibold tabular-nums text-cyan-300">
+                              {day.targetCalories.toLocaleString()} kcal
+                            </div>
+                          </React.Fragment>
+                        ))}
+                      </div>
+                      {onSaveNutritionSchedule && (
+                        <div className="border-t border-slate-800 p-3">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onSaveNutritionSchedule(
+                                msg.nutritionSchedule!,
+                                msg.id,
+                              )
+                            }
+                            disabled={savingNutritionMessageId === msg.id}
+                            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-cyan-400 px-3.5 py-2 text-xs font-semibold text-slate-950 transition-colors hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Utensils className="h-3.5 w-3.5" />
+                            {savingNutritionMessageId === msg.id
+                              ? "Adding to nutritional plan..."
+                              : "Add to nutritional plan"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                {msg.role === "assistant" &&
+                  msg.weeklyTrainingPlan &&
+                  msg.weeklyTrainingPlan.length > 0 && (
+                    <div className="mt-1 space-y-2">
+                      <div className="flex items-center gap-2 px-1 pt-1">
+                        <Calendar className="h-4 w-4 text-emerald-400" />
+                        <span className="text-xs font-semibold text-slate-100">
+                          Weekly training plan
+                        </span>
+                      </div>
+                      {msg.weeklyTrainingPlan.map((day) => (
+                        <WeeklyTrainingCard
+                          key={day.date}
+                          day={day}
+                          onReview={onOpenPlannedSessionModal}
+                        />
+                      ))}
+                    </div>
+                  )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {isLoading && (
           <div className="flex gap-3 max-w-[80%] mr-auto items-center">
