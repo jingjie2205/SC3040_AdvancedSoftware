@@ -65,7 +65,7 @@ npm run test:coverage
 Run individual page test with coverage:
 
 ```powershell
-npm exec vitest run --coverage "app/(app)/abc/xyz.test.tsx"
+npm exec vitest run --coverage "tests/foldername/testname.test.tsx"
 ```
 
 The HTML report is generated at `frontend/coverage/index.html`. Open it from
@@ -84,7 +84,7 @@ cd "backend"
 python -m pip install pytest-cov
 ```
 
-Run the dashboard backend tests and generate terminal and HTML coverage
+Run the backend tests and generate terminal and HTML coverage
 reports:
 
 ```powershell
