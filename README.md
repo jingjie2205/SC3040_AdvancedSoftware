@@ -84,11 +84,20 @@ cd "backend"
 python -m pip install pytest-cov
 ```
 
-Run the backend tests and generate terminal and HTML coverage
+Run all the backend tests and generate terminal and HTML coverage
 reports:
 
 ```powershell
-python -m pytest tests/dashboard/test_dashboard.py `
+python -m pytest tests/ `
+  --cov=app `
+  --cov-report=term-missing `
+  --cov-report=html:htmlcov
+```
+
+Run individual backend test with coverage:
+
+```powershell
+python -m pytest tests/foldername/testname.py `
   --cov=app `
   --cov-report=term-missing `
   --cov-report=html:htmlcov
