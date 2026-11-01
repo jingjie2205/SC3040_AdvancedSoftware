@@ -66,7 +66,7 @@ const card = (over: Partial<StravaCard> = {}): StravaCard => ({
   ...over,
 });
 
-describe("S-1 reading the activities the server sends", () => {
+describe("TS-1 reading the activities the server sends", () => {
   it.each([
     ["nothing", null],
     ["no body", undefined],
@@ -76,15 +76,15 @@ describe("S-1 reading the activities the server sends", () => {
     ["an object without activities", {}],
     ["activities that is not a list", { activities: "none" }],
     ["activities that is an object", { activities: {} }],
-  ])("S-1.01: %s is not the expected shape, so there is no list to show", (_label, body) => {
+  ])("TS-1.01: %s is not the expected shape, so there is no list to show", (_label, body) => {
     expect(parsePull(body)).toBeNull();
   });
 
-  it("S-1.02: an empty list is a list with no cards", () => {
+  it("TS-1.02: an empty list is a list with no cards", () => {
     expect(parsePull({ activities: [] })).toEqual([]);
   });
 
-  it("S-1.03: a well-formed activity becomes a card carrying every field", () => {
+  it("TS-1.03: a well-formed activity becomes a card carrying every field", () => {
     expect(pulled(raw())).toEqual([
       {
         stravaId: 1001,
@@ -110,18 +110,18 @@ describe("S-1 reading the activities the server sends", () => {
     ["2026-11-03 07:15", "2026-11-03", "07:15"],
     ["2026-11-03", "2026-11-03", null],
     ["2026-11-03T7:5", "2026-11-03", null],
-  ])("S-1.04: a start of '%s' is the day %s and the time %j", (startedLocal, day, time) => {
+  ])("TS-1.04: a start of '%s' is the day %s and the time %j", (startedLocal, day, time) => {
     expect(pulled(raw({ startedLocal }))?.[0]).toMatchObject({ day, time });
   });
 
   it.each([["03/11/2026"], ["November 3"], [""], [20261103], [null], [undefined]])(
-    "S-1.04: an activity whose start is %j has no day, so it is left out",
+    "TS-1.04: an activity whose start is %j has no day, so it is left out",
     (startedLocal) => {
       expect(pulled(raw({ startedLocal }))).toEqual([]);
     },
   );
 
-  it("S-1.05: an activity missing something it needs is left out and the rest are kept", () => {
+  it("TS-1.05: an activity missing something it needs is left out and the rest are kept", () => {
     const cards = pulled(
       raw({ stravaId: 1 }),
       "junk",
@@ -144,7 +144,7 @@ describe("S-1 reading the activities the server sends", () => {
     ["Evening ride", "Evening ride"],
     ["", "Untitled activity"],
     ["   ", "Untitled activity"],
-  ])("S-1.06: the name %j is shown as %j", (name, shown) => {
+  ])("TS-1.06: the name %j is shown as %j", (name, shown) => {
     expect(pulled(raw({ name }))?.[0].name).toBe(shown);
   });
 
@@ -152,7 +152,7 @@ describe("S-1 reading the activities the server sends", () => {
     ["distanceM", "distanceM"],
     ["movingTimeS", "movingTimeS"],
     ["elevationGainM", "elevationGainM"],
-  ] as const)("S-1.07: %s is never negative, and is 0 when it is missing or not a number", (key, field) => {
+  ] as const)("TS-1.07: %s is never negative, and is 0 when it is missing or not a number", (key, field) => {
     for (const [given, kept] of [
       [-5, 0],
       [0, 0],
@@ -172,7 +172,7 @@ describe("S-1 reading the activities the server sends", () => {
     [undefined, null],
     ["150", null],
     [Number.NaN, null],
-  ])("S-1.07: an average heart rate of %j is kept as %j", (given, kept) => {
+  ])("TS-1.07: an average heart rate of %j is kept as %j", (given, kept) => {
     expect(pulled(raw({ averageHeartrate: given }))?.[0].averageHeartrate).toBe(kept);
   });
 
@@ -183,12 +183,12 @@ describe("S-1 reading the activities the server sends", () => {
     [1, false],
     [null, false],
     [undefined, false],
-  ])("S-2.01: saved = %j means %j (only an actual true counts as on the schedule)", (given, kept) => {
+  ])("TS-2.01: saved = %j means %j (only an actual true counts as on the schedule)", (given, kept) => {
     expect(pulled(raw({ saved: given }))?.[0].saved).toBe(kept);
   });
 
   it.each(["run", "cycling", "gym", "bodyweight"])(
-    "S-2.02: an activity the schedule has a place for (%s) says what it would be saved as",
+    "TS-2.02: an activity the schedule has a place for (%s) says what it would be saved as",
     (activityType) => {
       expect(pulled(raw({ activityType, durationMin: 33, volume: 29 }))?.[0]).toMatchObject({
         savedAs: activityType,
@@ -199,7 +199,7 @@ describe("S-1 reading the activities the server sends", () => {
   );
 
   it.each([["swim"], ["walk"], ["Run"], [""], [null], [undefined], [5]])(
-    "S-2.02: an activity type of %j has no place on the schedule, so no minutes or points either",
+    "TS-2.02: an activity type of %j has no place on the schedule, so no minutes or points either",
     (activityType) => {
       expect(pulled(raw({ activityType, durationMin: 33, volume: 29 }))?.[0]).toMatchObject({
         savedAs: null,
@@ -214,11 +214,11 @@ describe("S-1 reading the activities the server sends", () => {
     ["minutes that are not a number", { durationMin: "40" }],
     ["no points", { volume: undefined }],
     ["points that are not finite", { volume: Number.NaN }],
-  ])("S-2.02: a saveable kind with %s cannot be placed, so none of the three are given", (_label, over) => {
+  ])("TS-2.02: a saveable kind with %s cannot be placed, so none of the three are given", (_label, over) => {
     expect(pulled(raw(over))?.[0]).toMatchObject({ savedAs: null, durationMin: null, points: null });
   });
 
-  it("S-1.08: cards come newest first by day and then by start time, and a missing time counts as midnight", () => {
+  it("TS-1.08: cards come newest first by day and then by start time, and a missing time counts as midnight", () => {
     const cards = pulled(
       raw({ stravaId: 1, startedLocal: "2026-11-01T09:00:00" }),
       raw({ stravaId: 2, startedLocal: "2026-11-03T07:15:00" }),
@@ -229,7 +229,7 @@ describe("S-1 reading the activities the server sends", () => {
     expect(cards?.map((c) => c.stravaId)).toEqual([3, 2, 4, 1, 5]);
   });
 
-  it("S-1.08: two activities starting at the same moment keep the order the server gave", () => {
+  it("TS-1.08: two activities starting at the same moment keep the order the server gave", () => {
     const cards = pulled(
       raw({ stravaId: 10, startedLocal: "2026-11-03T07:15:00" }),
       raw({ stravaId: 11, startedLocal: "2026-11-03T07:15:00" }),
@@ -239,13 +239,13 @@ describe("S-1 reading the activities the server sends", () => {
   });
 });
 
-describe("S-4 reading the connection status", () => {
+describe("TS-4 reading the connection status", () => {
   it.each([
     [true, 0],
     [true, 1],
     [false, 0],
     [false, 97],
-  ])("S-4.01: connected = %j with %i saved is understood", (connected, savedCount) => {
+  ])("TS-4.01: connected = %j with %i saved is understood", (connected, savedCount) => {
     expect(parseStatus({ connected, savedCount })).toEqual({ connected, savedCount });
   });
 
@@ -260,16 +260,16 @@ describe("S-4 reading the connection status", () => {
     ["the count is missing", { connected: true }],
     ["there is no body", null],
     ["it is not an object", "connected"],
-  ])("S-4.01: a status where %s is refused", (_label, body) => {
+  ])("TS-4.01: a status where %s is refused", (_label, body) => {
     expect(parseStatus(body)).toBeNull();
   });
 });
 
-describe("S-2 reading what a save returns", () => {
+describe("TS-2 reading what a save returns", () => {
   it.each([
     [{ savedIds: [1001, 1002], alreadySaved: 0, skipped: 0 }],
     [{ savedIds: [], alreadySaved: 2, skipped: 1 }],
-  ])("S-2.03: %j is understood", (body) => {
+  ])("TS-2.03: %j is understood", (body) => {
     expect(parseSaveResult(body)).toEqual(body);
   });
 
@@ -283,22 +283,22 @@ describe("S-2 reading what a save returns", () => {
     ["skipped is negative", { savedIds: [], alreadySaved: 0, skipped: -1 }],
     ["skipped is missing", { savedIds: [], alreadySaved: 0 }],
     ["there is no body", undefined],
-  ])("S-2.03: a result where %s is refused", (_label, body) => {
+  ])("TS-2.03: a result where %s is refused", (_label, body) => {
     expect(parseSaveResult(body)).toBeNull();
   });
 });
 
-describe("S-3 reading what a removal returns", () => {
+describe("TS-3 reading what a removal returns", () => {
   it.each([
     [0, 0],
     [1, 1],
     [97, 97],
-  ])("S-3.01: {deleted: %i} means %i were taken off", (deleted, expected) => {
+  ])("TS-3.01: {deleted: %i} means %i were taken off", (deleted, expected) => {
     expect(parseDeleted({ deleted })).toBe(expected);
   });
 
   it.each([[{ deleted: -1 }], [{ deleted: 1.5 }], [{ deleted: "3" }], [{}], [[]], [null], ["3"]])(
-    "S-3.01: %j is refused",
+    "TS-3.01: %j is refused",
     (body) => {
       expect(parseDeleted(body)).toBeNull();
     },
@@ -307,17 +307,17 @@ describe("S-3 reading what a removal returns", () => {
 
 /* ------------------------------------------------------------------ wording and numbers */
 
-describe("S-2 what can be saved and what the user is told", () => {
+describe("TS-2 what can be saved and what the user is told", () => {
   it.each([
     ["has a place and is not on the schedule", { savedAs: "run" as const, saved: false }, true],
     ["has a place and is on the schedule already", { savedAs: "run" as const, saved: true }, false],
     ["has no place and is not on the schedule", { savedAs: null, saved: false }, false],
     ["has no place and is marked saved", { savedAs: null, saved: true }, false],
-  ])("S-2.04: an activity that %s: can be saved = %j", (_label, over, expected) => {
+  ])("TS-2.04: an activity that %s: can be saved = %j", (_label, over, expected) => {
     expect(canSave(card(over))).toBe(expected);
   });
 
-  it("S-2.05: the summary counts what can be saved, what is on the schedule and what cannot be saved", () => {
+  it("TS-2.05: the summary counts what can be saved, what is on the schedule and what cannot be saved", () => {
     const cards = [
       card({ stravaId: 1 }),
       card({ stravaId: 2, savedAs: "cycling" }),
@@ -329,7 +329,7 @@ describe("S-2 what can be saved and what the user is told", () => {
     expect(summarisePull(cards)).toEqual({ total: 6, toSave: 2, onSchedule: 2, unsupported: 2 });
   });
 
-  it("S-2.05: with no cards every count is zero", () => {
+  it("TS-2.05: with no cards every count is zero", () => {
     expect(summarisePull([])).toEqual({ total: 0, toSave: 0, onSchedule: 0, unsupported: 0 });
   });
 
@@ -351,7 +351,7 @@ describe("S-2 what can be saved and what the user is told", () => {
       { savedIds: [1, 2], alreadySaved: 1, skipped: 1 },
       "Saved 2 activities to your schedule. 1 activity was already on your schedule. 1 activity couldn't be saved because it is no longer among your latest on Strava. Upload again to refresh the list.",
     ],
-  ])("S-2.06: the result %j is worded as '%s'", (result, text) => {
+  ])("TS-2.06: the result %j is worded as '%s'", (result, text) => {
     expect(describeSave(result)).toBe(text);
   });
 
@@ -361,13 +361,13 @@ describe("S-2 what can be saved and what the user is told", () => {
     ["everything was on the schedule already", "ok", { savedIds: [], alreadySaved: 2, skipped: 0 }],
     ["nothing saved and something refused", "error", { savedIds: [], alreadySaved: 0, skipped: 1 }],
     ["nothing saved, one already there and one refused", "error", { savedIds: [], alreadySaved: 1, skipped: 1 }],
-  ])("S-2.07: when %s the message is an %s", (_label, tone, result) => {
+  ])("TS-2.07: when %s the message is an %s", (_label, tone, result) => {
     expect(saveTone(result)).toBe(tone);
   });
 });
 
-describe("S-1 how an activity is shown", () => {
-  it("S-1.09: the link goes to the activity on Strava", () => {
+describe("TS-1 how an activity is shown", () => {
+  it("TS-1.09: the link goes to the activity on Strava", () => {
     expect(activityUrl(1001)).toBe("https://www.strava.com/activities/1001");
   });
 
@@ -382,7 +382,7 @@ describe("S-1 how an activity is shown", () => {
     [100000, "100 km"],
     [150400, "150 km"],
     [150600, "151 km"],
-  ])("S-1.10: %d m is shown as %s", (meters, shown) => {
+  ])("TS-1.10: %d m is shown as %s", (meters, shown) => {
     expect(formatDistance(meters)).toBe(shown);
   });
 
@@ -398,7 +398,7 @@ describe("S-1 how an activity is shown", () => {
     [4500, "1 h 15 min"],
     [7200, "2 h 00 min"],
     [37230, "10 h 21 min"],
-  ])("S-1.11: %d s is shown as %s", (seconds, shown) => {
+  ])("TS-1.11: %d s is shown as %s", (seconds, shown) => {
     expect(formatDuration(seconds)).toBe(shown);
   });
 
@@ -418,7 +418,7 @@ describe("S-1 how an activity is shown", () => {
     ["Ride", 30000, 3600, null],
     ["Swim", 1500, 1800, null],
     ["WeightTraining", 0, 3000, null],
-  ])("S-1.12: %s over %d m in %d s has the pace %j", (type, distanceM, movingTimeS, pace) => {
+  ])("TS-1.12: %s over %d m in %d s has the pace %j", (type, distanceM, movingTimeS, pace) => {
     expect(formatPace(type, distanceM, movingTimeS)).toBe(pace);
   });
 
@@ -434,7 +434,7 @@ describe("S-1 how an activity is shown", () => {
     ["HighIntensityIntervalTraining", "HIIT"],
     ["Yoga", "Yoga"],
     ["", ""],
-  ])("S-1.13: the Strava type %j is shown as %j", (type, shown) => {
+  ])("TS-1.13: the Strava type %j is shown as %j", (type, shown) => {
     expect(typeLabel(type)).toBe(shown);
   });
 
@@ -459,7 +459,7 @@ describe("S-1 how an activity is shown", () => {
     ["Kayaking", "other"],
     ["Golf", "other"],
     ["", "other"],
-  ])("S-1.14: the Strava type %j gets the %s icon", (type, kind) => {
+  ])("TS-1.14: the Strava type %j gets the %s icon", (type, kind) => {
     expect(iconKind(type)).toBe(kind);
   });
 
@@ -470,7 +470,7 @@ describe("S-1 how an activity is shown", () => {
     [1, "activity", "activities", "1 activity"],
     [2, "activity", "activities", "2 activities"],
     [0, "activity", "activities", "0 activities"],
-  ])("S-1.15: plural(%d, %j, %j) is %j", (n, noun, pluralNoun, text) => {
+  ])("TS-1.15: plural(%d, %j, %j) is %j", (n, noun, pluralNoun, text) => {
     expect(plural(n, noun, pluralNoun)).toBe(text);
   });
 });
@@ -619,12 +619,12 @@ describe("API-4 the Strava client", () => {
     ["only the client id is set", { NEXT_PUBLIC_STRAVA_CLIENT_ID: "12345", NEXT_PUBLIC_STRAVA_REDIRECT_URI: "" }, false],
     ["only the redirect address is set", { NEXT_PUBLIC_STRAVA_CLIENT_ID: "", NEXT_PUBLIC_STRAVA_REDIRECT_URI: "http://app.test/api/auth/callback" }, false],
     ["neither is set", { NEXT_PUBLIC_STRAVA_CLIENT_ID: "", NEXT_PUBLIC_STRAVA_REDIRECT_URI: "" }, false],
-  ])("S-4.02: when %s, there is a Connect link = %j", async (_label, env, hasLink) => {
+  ])("TS-4.02: when %s, there is a Connect link = %j", async (_label, env, hasLink) => {
     const { stravaConnectUrl } = await loadStrava(env);
     expect(stravaConnectUrl() !== null).toBe(hasLink);
   });
 
-  it("S-4.03: the Connect link goes to Strava's consent page and brings the user back to the Training tab", async () => {
+  it("TS-4.03: the Connect link goes to Strava's consent page and brings the user back to the Training tab", async () => {
     const { stravaConnectUrl } = await loadStrava({
       NEXT_PUBLIC_STRAVA_CLIENT_ID: "12345",
       NEXT_PUBLIC_STRAVA_REDIRECT_URI: "http://app.test/api/auth/callback",

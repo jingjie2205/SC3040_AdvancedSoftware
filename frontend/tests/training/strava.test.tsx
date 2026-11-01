@@ -156,10 +156,10 @@ async function uploaded(cards: StravaCard[], savedCount = 0) {
   await list();
 }
 
-/* ------------------------------------------------------------------ S-4 connection */
+/* ------------------------------------------------------------------ TS-4 connection */
 
-describe("S-4 opening the Strava tab", () => {
-  it("S-4.20: opening the tab asks the user's own server whether Strava is connected, and does not ask Strava for anything", async () => {
+describe("TS-4 opening the Strava tab", () => {
+  it("TS-4.20: opening the tab asks the user's own server whether Strava is connected, and does not ask Strava for anything", async () => {
     const pending = deferred<ReturnType<typeof status>>();
     strava.loadStatus.mockReturnValue(pending.promise);
     await onStrava();
@@ -173,7 +173,7 @@ describe("S-4 opening the Strava tab", () => {
     expect(strava.saveToSchedule).not.toHaveBeenCalled();
   });
 
-  it("S-4.21: a connected user who has not uploaded yet is told nothing is saved until they say so", async () => {
+  it("TS-4.21: a connected user who has not uploaded yet is told nothing is saved until they say so", async () => {
     await onStrava();
     await uploadButton();
     expect(
@@ -183,7 +183,7 @@ describe("S-4 opening the Strava tab", () => {
     expect(screen.queryByRole("button", { name: /^Save all/ })).not.toBeInTheDocument();
   });
 
-  it("S-4.22: a user who is not connected is offered Connect Strava, which goes to Strava's consent page", async () => {
+  it("TS-4.22: a user who is not connected is offered Connect Strava, which goes to Strava's consent page", async () => {
     strava.connectUrl = "https://www.strava.com/oauth/authorize?client_id=12345&state=training";
     strava.loadStatus.mockResolvedValue(status(false));
     await onStrava();
@@ -193,7 +193,7 @@ describe("S-4 opening the Strava tab", () => {
     expect(screen.queryByRole("button", { name: "Upload Strava data" })).not.toBeInTheDocument();
   });
 
-  it("S-4.23: when this server has no Strava app set up, the user is told so instead of being sent nowhere", async () => {
+  it("TS-4.23: when this server has no Strava app set up, the user is told so instead of being sent nowhere", async () => {
     strava.connectUrl = null;
     strava.loadStatus.mockResolvedValue(status(false));
     await onStrava();
@@ -202,7 +202,7 @@ describe("S-4 opening the Strava tab", () => {
     expect(screen.queryByRole("button", { name: "Upload Strava data" })).not.toBeInTheDocument();
   });
 
-  it("S-4.24: if the connection can't be checked the user sees why and can try again", async () => {
+  it("TS-4.24: if the connection can't be checked the user sees why and can try again", async () => {
     strava.loadStatus.mockResolvedValueOnce(fail("NETWORK", "Couldn't reach the server. Check your connection and try again."));
     await onStrava();
     const alert = await screen.findByRole("alert");
@@ -214,7 +214,7 @@ describe("S-4 opening the Strava tab", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("S-4.25: without the backend the tab says what is needed and makes no call", async () => {
+  it("TS-4.25: without the backend the tab says what is needed and makes no call", async () => {
     strava.available = false;
     await onStrava();
     expect(
@@ -229,7 +229,7 @@ describe("S-4 opening the Strava tab", () => {
     expect(screen.queryByText("Powered by Strava")).not.toBeInTheDocument();
   });
 
-  it("S-4.26: the tab credits Strava and links to where the connection is managed", async () => {
+  it("TS-4.26: the tab credits Strava and links to where the connection is managed", async () => {
     await onStrava();
     await uploadButton();
     expect(screen.getByText("Powered by Strava")).toBeInTheDocument();
@@ -239,7 +239,7 @@ describe("S-4 opening the Strava tab", () => {
     );
   });
 
-  it("S-4.27: after Strava is disconnected, saved activities are still listed and can still be removed", async () => {
+  it("TS-4.27: after Strava is disconnected, saved activities are still listed and can still be removed", async () => {
     strava.connectUrl = "https://www.strava.com/oauth/authorize?state=training";
     strava.loadStatus.mockResolvedValue(status(false, 2));
     await onStrava();
@@ -258,7 +258,7 @@ describe("S-4 opening the Strava tab", () => {
     ["strava=denied&reason=access_denied", "Strava access wasn't granted"],
     ["strava=error", "Couldn't connect Strava. Try again."],
     ["strava=error&reason=server_error", "Couldn't connect Strava. Try again."],
-  ])("S-4.28: coming back from Strava with ?%s opens the Strava tab and says '%s'", async (query, message) => {
+  ])("TS-4.28: coming back from Strava with ?%s opens the Strava tab and says '%s'", async (query, message) => {
     await renderTrainingPage(TrainingPage, { query });
     expect(await screen.findByText(message)).toBeInTheDocument();
     const group = screen.getByRole("group", { name: "Training sections" });
@@ -268,10 +268,10 @@ describe("S-4 opening the Strava tab", () => {
   });
 });
 
-/* ------------------------------------------------------------------ S-1 upload and cards */
+/* ------------------------------------------------------------------ TS-1 upload and cards */
 
-describe("S-1 uploading and looking at activities", () => {
-  it("S-1.20: Upload asks for the latest activities, is locked while it waits, and saves nothing", async () => {
+describe("TS-1 uploading and looking at activities", () => {
+  it("TS-1.20: Upload asks for the latest activities, is locked while it waits, and saves nothing", async () => {
     const pending = deferred<ReturnType<typeof ok<StravaCard[]>>>();
     strava.pullActivities.mockReturnValue(pending.promise);
     await onStrava();
@@ -285,7 +285,7 @@ describe("S-1 uploading and looking at activities", () => {
     expect(await uploadButton()).toBeEnabled();
   });
 
-  it("S-1.21: a card shows what the activity was: name, kind, day and time, distance, time, pace, heart rate and climb", async () => {
+  it("TS-1.21: a card shows what the activity was: name, kind, day and time, distance, time, pace, heart rate and climb", async () => {
     await uploaded([run]);
     const item = await cardOf("Morning run");
     expect(item.getByText("Run · Tue 3 Nov · 07:15")).toBeInTheDocument();
@@ -297,7 +297,7 @@ describe("S-1 uploading and looking at activities", () => {
     expect(item.getByText("Saves as Run · 40 min · 40 pts")).toBeInTheDocument();
   });
 
-  it("S-1.21: each card links to its activity on Strava, in a new tab, with the activity's name for screen readers", async () => {
+  it("TS-1.21: each card links to its activity on Strava, in a new tab, with the activity's name for screen readers", async () => {
     await uploaded([run]);
     const link = (await cardOf("Morning run")).getByRole("link", { name: /View on Strava/ });
     expect(link).toHaveAttribute("href", "https://www.strava.com/activities/1001");
@@ -308,13 +308,13 @@ describe("S-1 uploading and looking at activities", () => {
     expect(within(link).getByText("(Morning run)")).toHaveClass("sr-only");
   });
 
-  it("S-1.22: an activity from an earlier year shows its year", async () => {
+  it("TS-1.22: an activity from an earlier year shows its year", async () => {
     await uploaded([card({ stravaId: 2001, name: "Old run", day: "2025-08-14" }), run]);
     expect((await cardOf("Old run")).getByText("Run · Thu 14 Aug 2025 · 07:15")).toBeInTheDocument();
     expect((await cardOf("Morning run")).getByText("Run · Tue 3 Nov · 07:15")).toBeInTheDocument();
   });
 
-  it("S-1.23: what Strava didn't record is left out rather than shown as zero", async () => {
+  it("TS-1.23: what Strava didn't record is left out rather than shown as zero", async () => {
     await uploaded([
       card({ distanceM: 0, averageHeartrate: null, elevationGainM: 0.9, time: null, type: "Ride" }),
       card({ stravaId: 1002, name: "Short climb", elevationGainM: 1 }),
@@ -329,19 +329,19 @@ describe("S-1 uploading and looking at activities", () => {
     expect((await cardOf("Short climb")).getByText("1 m climb")).toBeInTheDocument();
   });
 
-  it("S-1.24: a summary says how many activities came, how many can be saved, are on the schedule and can't be saved", async () => {
+  it("TS-1.24: a summary says how many activities came, how many can be saved, are on the schedule and can't be saved", async () => {
     await uploaded([run, ride, gym, swim]);
     expect(screen.getByText("4 activities from Strava")).toBeInTheDocument();
     expect(screen.getByText("· 2 to save · 1 on your schedule · 1 can't be saved")).toBeInTheDocument();
   });
 
-  it("S-1.24: the summary leaves out the parts that are zero, and says '1 activity' for one", async () => {
+  it("TS-1.24: the summary leaves out the parts that are zero, and says '1 activity' for one", async () => {
     await uploaded([run]);
     expect(screen.getByText("1 activity from Strava")).toBeInTheDocument();
     expect(screen.getByText("· 1 to save")).toBeInTheDocument();
   });
 
-  it("S-1.25: an activity the schedule has no place for says so and offers no Save", async () => {
+  it("TS-1.25: an activity the schedule has no place for says so and offers no Save", async () => {
     await uploaded([swim]);
     const item = await cardOf("Pool swim");
     expect(
@@ -351,7 +351,7 @@ describe("S-1 uploading and looking at activities", () => {
     expect(item.queryByText("On schedule")).not.toBeInTheDocument();
   });
 
-  it("S-1.26: an upload with nothing in it says Strava has no activities to show", async () => {
+  it("TS-1.26: an upload with nothing in it says Strava has no activities to show", async () => {
     strava.pullActivities.mockResolvedValue(ok([]));
     await onStrava();
     fireEvent.click(await uploadButton());
@@ -360,7 +360,7 @@ describe("S-1 uploading and looking at activities", () => {
     expect(screen.queryByRole("button", { name: /^Save all/ })).not.toBeInTheDocument();
   });
 
-  it("S-1.27: if the upload fails the user sees why, and the tab stays as it was", async () => {
+  it("TS-1.27: if the upload fails the user sees why, and the tab stays as it was", async () => {
     strava.pullActivities.mockResolvedValue(fail("RATE_LIMITED", "Strava is busy. Try again in a few minutes."));
     await onStrava();
     fireEvent.click(await uploadButton());
@@ -370,7 +370,7 @@ describe("S-1 uploading and looking at activities", () => {
     expect(screen.getByRole("button", { name: "Upload Strava data" })).toBeEnabled();
   });
 
-  it("S-1.28: if Strava turns out not to be connected, the tab asks again and offers Connect instead", async () => {
+  it("TS-1.28: if Strava turns out not to be connected, the tab asks again and offers Connect instead", async () => {
     strava.connectUrl = "https://www.strava.com/oauth/authorize?state=training";
     strava.loadStatus.mockResolvedValueOnce(status(true)).mockResolvedValue(status(false));
     strava.pullActivities.mockResolvedValue(fail("NOT_CONNECTED", "Strava isn't connected. Connect it first."));
@@ -383,7 +383,7 @@ describe("S-1 uploading and looking at activities", () => {
     expect(strava.loadStatus).toHaveBeenCalledTimes(2);
   });
 
-  it("S-1.29: uploading again replaces the cards with the newest list", async () => {
+  it("TS-1.29: uploading again replaces the cards with the newest list", async () => {
     await uploaded([run]);
     strava.pullActivities.mockResolvedValue(ok([ride]));
     fireEvent.click(await uploadButton());
@@ -392,10 +392,10 @@ describe("S-1 uploading and looking at activities", () => {
   });
 });
 
-/* ------------------------------------------------------------------ S-2 saving */
+/* ------------------------------------------------------------------ TS-2 saving */
 
-describe("S-2 saving activities to the schedule", () => {
-  it("S-2.20: saving one activity sends just that one, locks the tab while it works, and then marks it as on the schedule", async () => {
+describe("TS-2 saving activities to the schedule", () => {
+  it("TS-2.20: saving one activity sends just that one, locks the tab while it works, and then marks it as on the schedule", async () => {
     const pending = deferred<ReturnType<typeof saved>>();
     await uploaded([run, ride]);
     strava.saveToSchedule.mockReturnValue(pending.promise);
@@ -419,7 +419,7 @@ describe("S-2 saving activities to the schedule", () => {
     expect((await cardOf("Lunch ride")).queryByText("On schedule")).not.toBeInTheDocument();
   });
 
-  it("S-2.20: the user is told it was saved, can go and see the schedule, and the count of saved activities is refreshed", async () => {
+  it("TS-2.20: the user is told it was saved, can go and see the schedule, and the count of saved activities is refreshed", async () => {
     await uploaded([run, ride]);
     strava.saveToSchedule.mockResolvedValue(saved([1001]));
     strava.loadStatus.mockResolvedValue(status(true, 1));
@@ -432,7 +432,7 @@ describe("S-2 saving activities to the schedule", () => {
     expect(screen.getByText("· 1 to save · 1 on your schedule")).toBeInTheDocument();
   });
 
-  it("S-2.21: Save all sends every activity that can be saved, and none of the others", async () => {
+  it("TS-2.21: Save all sends every activity that can be saved, and none of the others", async () => {
     await uploaded([run, ride, gym, swim]);
     strava.saveToSchedule.mockResolvedValue(saved([1001, 1002]));
     expect(saveAll()).toHaveAccessibleName("Save all to schedule (2)");
@@ -448,12 +448,12 @@ describe("S-2 saving activities to the schedule", () => {
     await waitFor(() => expect(saveAll("Save all to schedule")).toBeDisabled());
   });
 
-  it("S-2.22: Save all is disabled when everything is saved already or cannot be saved", async () => {
+  it("TS-2.22: Save all is disabled when everything is saved already or cannot be saved", async () => {
     await uploaded([gym, swim]);
     expect(saveAll("Save all to schedule")).toBeDisabled();
   });
 
-  it("S-2.23: an activity already on the schedule says so and has no Save button", async () => {
+  it("TS-2.23: an activity already on the schedule says so and has no Save button", async () => {
     await uploaded([gym]);
     const item = await cardOf("Evening gym");
     expect(item.getByText("On schedule")).toBeInTheDocument();
@@ -461,7 +461,7 @@ describe("S-2 saving activities to the schedule", () => {
     expect(item.queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("S-2.24: when some were saved, some were there already and some are gone from Strava's latest, each is accounted for", async () => {
+  it("TS-2.24: when some were saved, some were there already and some are gone from Strava's latest, each is accounted for", async () => {
     await uploaded([run, ride]);
     strava.saveToSchedule.mockResolvedValue(saved([1001], 1, 1));
     fireEvent.click(saveAll());
@@ -474,7 +474,7 @@ describe("S-2 saving activities to the schedule", () => {
     expect(screen.getByRole("button", { name: "View schedule" })).toBeInTheDocument();
   });
 
-  it("S-2.25: when nothing could be saved the message is an error and there is nowhere to go", async () => {
+  it("TS-2.25: when nothing could be saved the message is an error and there is nowhere to go", async () => {
     await uploaded([run]);
     strava.saveToSchedule.mockResolvedValue(saved([], 0, 1));
     fireEvent.click(saveButton("Morning run"));
@@ -484,7 +484,7 @@ describe("S-2 saving activities to the schedule", () => {
     expect((await cardOf("Morning run")).queryByText("On schedule")).not.toBeInTheDocument();
   });
 
-  it("S-2.26: if the save fails the user sees why, nothing is marked as saved and they can try again", async () => {
+  it("TS-2.26: if the save fails the user sees why, nothing is marked as saved and they can try again", async () => {
     await uploaded([run]);
     strava.saveToSchedule.mockResolvedValue(fail("SERVER_ERROR", "The server returned an error (500)."));
     fireEvent.click(saveButton("Morning run"));
@@ -494,7 +494,7 @@ describe("S-2 saving activities to the schedule", () => {
     expect(saveButton("Morning run")).toBeEnabled();
   });
 
-  it("S-2.26: if Strava turns out not to be connected while saving, the tab asks again and offers Connect", async () => {
+  it("TS-2.26: if Strava turns out not to be connected while saving, the tab asks again and offers Connect", async () => {
     strava.connectUrl = "https://www.strava.com/oauth/authorize?state=training";
     await uploaded([run]);
     strava.loadStatus.mockResolvedValue(status(false));
@@ -504,7 +504,7 @@ describe("S-2 saving activities to the schedule", () => {
     expect(screen.getByText("Strava isn't connected. Connect it first.")).toBeInTheDocument();
   });
 
-  it("S-2.27: View schedule takes the user to the Schedule tab", async () => {
+  it("TS-2.27: View schedule takes the user to the Schedule tab", async () => {
     await uploaded([run]);
     strava.saveToSchedule.mockResolvedValue(saved([1001]));
     fireEvent.click(saveButton("Morning run"));
@@ -515,7 +515,7 @@ describe("S-2 saving activities to the schedule", () => {
     expect(await screen.findByRole("group", { name: "Calendar view" })).toBeInTheDocument();
   });
 
-  it("S-2.28: a new notice replaces the old one, and starting an upload clears it", async () => {
+  it("TS-2.28: a new notice replaces the old one, and starting an upload clears it", async () => {
     await uploaded([run, ride]);
     strava.saveToSchedule.mockResolvedValue(saved([1001]));
     fireEvent.click(saveButton("Morning run"));
@@ -526,10 +526,10 @@ describe("S-2 saving activities to the schedule", () => {
   });
 });
 
-/* ------------------------------------------------------------------ S-3 removing */
+/* ------------------------------------------------------------------ TS-3 removing */
 
-describe("S-3 removing saved activities", () => {
-  it("S-3.20: the Remove button and the count show only when something from Strava is on the schedule", async () => {
+describe("TS-3 removing saved activities", () => {
+  it("TS-3.20: the Remove button and the count show only when something from Strava is on the schedule", async () => {
     await onStrava();
     await uploadButton();
     expect(screen.queryByRole("button", { name: "Remove saved activities" })).not.toBeInTheDocument();
@@ -539,14 +539,14 @@ describe("S-3 removing saved activities", () => {
   it.each([
     [1, "1 Strava activity on your schedule"],
     [3, "3 Strava activities on your schedule"],
-  ])("S-3.20: with %i saved the tab says '%s' and offers Remove", async (count, text) => {
+  ])("TS-3.20: with %i saved the tab says '%s' and offers Remove", async (count, text) => {
     strava.loadStatus.mockResolvedValue(status(true, count));
     await onStrava();
     expect(await screen.findByText(text)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove saved activities" })).toBeEnabled();
   });
 
-  it("S-3.21: the user is asked first, told what stays, and Cancel changes nothing", async () => {
+  it("TS-3.21: the user is asked first, told what stays, and Cancel changes nothing", async () => {
     strava.loadStatus.mockResolvedValue(status(true, 3));
     await onStrava();
     fireEvent.click(await screen.findByRole("button", { name: "Remove saved activities" }));
@@ -563,7 +563,7 @@ describe("S-3 removing saved activities", () => {
     expect(screen.getByText("3 Strava activities on your schedule")).toBeInTheDocument();
   });
 
-  it("S-3.22: confirming removes them, says how many, and the cards go back to being saveable", async () => {
+  it("TS-3.22: confirming removes them, says how many, and the cards go back to being saveable", async () => {
     await uploaded([gym, run], 3);
     strava.removeFromSchedule.mockResolvedValue(ok(3));
     strava.loadStatus.mockResolvedValue(status(true, 0));
@@ -585,7 +585,7 @@ describe("S-3 removing saved activities", () => {
     [1, "Removed 1 activity from your schedule."],
     [2, "Removed 2 activities from your schedule."],
     [0, "There were no Strava activities on your schedule."],
-  ])("S-3.23: when %i were removed the user is told '%s'", async (removed, message) => {
+  ])("TS-3.23: when %i were removed the user is told '%s'", async (removed, message) => {
     strava.loadStatus.mockResolvedValue(status(true, 2));
     strava.removeFromSchedule.mockResolvedValue(ok(removed));
     await onStrava();
@@ -594,7 +594,7 @@ describe("S-3 removing saved activities", () => {
     expect(await screen.findByText(message)).toBeInTheDocument();
   });
 
-  it("S-3.24: if removing fails the user sees why, the dialog closes and the activities are still counted", async () => {
+  it("TS-3.24: if removing fails the user sees why, the dialog closes and the activities are still counted", async () => {
     strava.loadStatus.mockResolvedValue(status(true, 2));
     strava.removeFromSchedule.mockResolvedValue(fail("SERVER_ERROR", "The server returned an error (500)."));
     await onStrava();
