@@ -1,5 +1,5 @@
-# FITRA — Two-Tier Smart nutritional and training platform. 
->
+# FITRA — Two-Tier Smart nutritional and training platform.
+
 > 1. **Frontend (`frontend/`):** Next.js 15+ App Router, React 19, TypeScript, Tailwind CSS
 > 2. **Backend (`backend/`):** Python FastAPI, Google Gemini 3.8 for AI coaching, Supabase for database management.
 
@@ -47,4 +47,65 @@ npm install
 
 # Start Next.js development server
 npm run dev
+```
+
+---
+
+## Tests
+
+### Frontend — Vitest
+
+Run all frontend tests and generate a coverage report:
+
+```powershell
+cd "frontend"
+npm run test:coverage
+```
+
+Run individual page test with coverage:
+
+```powershell
+npm exec vitest run --coverage "tests/foldername/testname.test.tsx"
+```
+
+The HTML report is generated at `frontend/coverage/index.html`. Open it from
+the `frontend` directory with:
+
+```powershell
+Start-Process ".\coverage\index.html"
+```
+
+### Backend — Pytest
+
+Install the coverage plugin once if it is not already available:
+
+```powershell
+cd "backend"
+python -m pip install pytest-cov
+```
+
+Run all the backend tests and generate terminal and HTML coverage
+reports:
+
+```powershell
+python -m pytest tests/ `
+  --cov=app `
+  --cov-report=term-missing `
+  --cov-report=html:htmlcov
+```
+
+Run individual backend test with coverage:
+
+```powershell
+python -m pytest tests/foldername/testname.py `
+  --cov=app `
+  --cov-report=term-missing `
+  --cov-report=html:htmlcov
+```
+
+The HTML report is generated at `backend/htmlcov/index.html`. Open it from the
+`backend` directory with:
+
+```powershell
+Start-Process ".\htmlcov\index.html"
 ```

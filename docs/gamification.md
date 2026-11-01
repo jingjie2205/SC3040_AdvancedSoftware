@@ -153,6 +153,7 @@ Things to know:
 | `backend/app/models/gamification.py` | Request and response models (camelCase) |
 | `backend/app/controllers/checkin.py` | `/checkin/me/dates` for the calendar |
 | `backend/tests/test_gamification.py` | Tests, using an in-memory stand-in for Supabase |
+| `backend/tests/test_leaderboard_page.py` | The page's test cases LT-1 to LT-8 from the Test Coverage Report, run through the API calls the page makes |
 | `frontend/app/(app)/dashboard/leaderboard/page.tsx` | The page |
 | `frontend/app/(app)/dashboard/leaderboard/_components/` | Stats, check-in, Recent XP, leaderboard and challenges panels, the XP-on-hold alert, and the new-challenge form |
 | `frontend/lib/gamification/` | Types, rules, zod schemas, and the API in two versions: real backend and mock data |
@@ -188,12 +189,14 @@ challenges, use two accounts and add each other on the Friends page.
 
 ```powershell
 # From backend/
-.venv\Scripts\python -m pytest tests/test_gamification.py tests/training/test_training_xp.py -q
+.venv\Scripts\python -m pytest tests/test_gamification.py tests/test_leaderboard_page.py tests/training/test_training_xp.py -q
 ```
 
 `test_gamification.py` covers the XP, streak and rank rules, check-ins, the leaderboard and friends,
 challenges and rewards, XP history and the calendar endpoint, both in the service and over HTTP. The
 in-memory stand-in mirrors the database's unique constraints and the `award_gamification_xp` function.
+`test_leaderboard_page.py` reuses it to run test cases LT-1 to LT-8 from the Test Coverage Report, one
+test per case.
 
 ## Not built yet, and who it depends on
 

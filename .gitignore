@@ -24,6 +24,13 @@ ENV/
 build/
 dist/
 
+# Test coverage reports
+coverage/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
 # Environment files with secrets
 .env
 .env*.local
