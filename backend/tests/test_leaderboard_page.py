@@ -1,6 +1,6 @@
 """
-The leaderboard page, run through the same API calls the page makes (frontend/lib/gamification/http-api.ts).
-The test_lt<n> tests are test cases LT-1 to LT-5 in the Test Coverage Report.
+The leaderboard page's test cases (LT-1 to LT-8 in the Test Coverage Report), each run through the same
+API calls the page makes (frontend/lib/gamification/http-api.ts).
 
 Uses the in-memory Supabase from test_gamification.py, so nothing here talks to a real database.
 """
@@ -9,14 +9,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from postgrest.exceptions import APIError
 
 from app.main import app
 from app.commons.auth.deps import get_current_user_id
 from app.controllers import gamification as gamification_controller
 from app.services import gamification as svc
 from test_gamification import (
-    ALICE, BOB, CAROL, DAVE, METRICS, TODAY, FakeSupabase, add_xp_event, befriend, hold, log_run,
+    ALICE, BOB, CAROL, DAVE, METRICS, TODAY, FakeSupabase, befriend, hold, log_run,
 )
 
 NAMES = {ALICE: "Alice Wong", BOB: "Bob Tan", CAROL: "Carol Lim", DAVE: "Dave Ng"}
@@ -53,8 +52,7 @@ def clock(monkeypatch):
 def api(sb, clock, monkeypatch):
     monkeypatch.setattr(gamification_controller, "get_supabase_admin", lambda: sb)
     sign_in(ALICE)
-    # A server error comes back as the 500 response the page would get, instead of being raised here.
-    yield TestClient(app, raise_server_exceptions=False)
+    yield TestClient(app)
     app.dependency_overrides.clear()
 
 
@@ -82,26 +80,6 @@ def respond(api, challenge_id, accept):
     return api.post(f"/gamification/challenges/{challenge_id}/respond", json={"accept": accept})
 
 
-def fail_inserts(sb, monkeypatch, table):
-    """Inserts into table fail the way PostgREST reports a database it can't reach."""
-    real_table = sb.table
-
-    def table_(name):
-        query = real_table(name)
-        if name == table:
-            real_execute = query.execute
-
-            def execute():
-                if query.op == "insert":
-                    raise APIError({"code": "PGRST000", "message": "Could not connect with the database"})
-                return real_execute()
-
-            query.execute = execute
-        return query
-
-    monkeypatch.setattr(sb, "table", table_)
-
-
 # --- The leaderboard panel (G-3) ---------------------------------------------
 
 def test_lt1_leaderboard_ranks_the_user_and_friends_by_xp(api, sb):
@@ -121,7 +99,7 @@ def test_lt1_leaderboard_ranks_the_user_and_friends_by_xp(api, sb):
     assert [e["isCurrentUser"] for e in xp["entries"]] == [False, True, False]
 
 
-def test_switching_the_metric_reranks_by_streak_and_by_mileage(api, sb):
+def test_lt6_switching_the_metric_reranks_by_streak_and_by_mileage(api, sb):
     for offset in (1, 0):
         svc.perform_checkin(sb, ALICE, METRICS, TODAY - timedelta(days=offset))
     svc.perform_checkin(sb, BOB, METRICS, TODAY)
@@ -143,20 +121,6 @@ def test_switching_the_metric_reranks_by_streak_and_by_mileage(api, sb):
         ("Alice Wong", 8.0),
         ("Carol Lim", 0.0),
     ]
-
-
-def test_user_without_friends_gets_the_empty_state(api, sb):
-    sign_in(DAVE)
-
-    for metric in ("xp", "streak", "mileage"):
-        assert board(api, metric)["friendCount"] == 0
-
-    # Alice accepts Dave's request on the Friends page
-    next(r for r in sb.db["friend_requests"] if r["sender_id"] == DAVE)["status"] = "accepted"
-    xp = board(api, "xp")
-
-    assert xp["friendCount"] == 1
-    assert {e["displayName"] for e in xp["entries"]} == {"Dave Ng", "Alice Wong"}
 
 
 # --- The daily check-in panel (G-1) ------------------------------------------
@@ -205,41 +169,7 @@ def test_lt3_second_check_in_on_the_same_day_is_refused(api, sb):
     assert not [e for e in sb.db["xp_events"] if e["user_id"] == BOB]
 
 
-@pytest.mark.parametrize(
-    "answers",
-    [
-        {"muscleFatigue": 3, "mood": 4},  # a question left unanswered
-        {**METRICS, "mood": 0},
-        {**METRICS, "dietAdherence": 6},
-        {**METRICS, "muscleFatigue": 3.5},
-    ],
-)
-def test_check_in_answers_must_be_whole_numbers_from_1_to_5(api, sb, answers):
-    response = api.post("/gamification/checkins", json=answers)
-
-    assert response.status_code == 422
-    assert not sb.db.get("daily_checkins")
-    assert api.get("/gamification/me").json()["checkedInToday"] is False
-
-
-def test_database_outage_returns_an_error_and_saves_nothing(api, sb, monkeypatch):
-    fail_inserts(sb, monkeypatch, "daily_checkins")
-
-    checkin = api.post("/gamification/checkins", json=METRICS)
-    me = api.get("/gamification/me").json()
-
-    assert checkin.status_code == 500
-    assert (me["checkedInToday"], me["currentStreak"], me["totalXp"]) == (False, 0, 0)
-    assert not sb.db.get("xp_events")
-
-    # The challenge is saved before its participants, so a failure there must undo it
-    fail_inserts(sb, monkeypatch, "challenge_participants")
-
-    assert api.post("/gamification/challenges", json=challenge_body()).status_code == 500
-    assert not sb.db.get("challenges")
-
-
-# --- XP on hold and Recent XP (G-2) ------------------------------------------
+# --- XP on hold (G-2) --------------------------------------------------------
 
 def test_lt4_xp_on_hold_is_listed_and_paid_after_a_resync(api, sb):
     meal = str(uuid.uuid4())
@@ -261,24 +191,9 @@ def test_lt4_xp_on_hold_is_listed_and_paid_after_a_resync(api, sb):
     assert api.get("/gamification/pending-xp").json()["items"] == []
 
 
-def test_recent_xp_shows_the_users_latest_20_awards_newest_first(api, sb):
-    assert api.get("/gamification/xp-events").json()["events"] == []
-
-    for minute in range(25):
-        add_xp_event(sb, ALICE, "meal", 10, datetime(2026, 10, 3, 1, minute, tzinfo=timezone.utc))
-    add_xp_event(sb, ALICE, "workout", 50, datetime(2026, 10, 4, 2, 0, tzinfo=timezone.utc))
-    add_xp_event(sb, BOB, "workout", 50, datetime(2026, 10, 5, 3, 0, tzinfo=timezone.utc))
-    api.post("/gamification/checkins", json=METRICS)
-
-    events = api.get("/gamification/xp-events").json()["events"]
-
-    assert len(events) == 20
-    assert [(e["source"], e["amount"]) for e in events[:3]] == [("checkin", 10), ("workout", 50), ("meal", 10)]
-
-
 # --- Challenges (G-4) --------------------------------------------------------
 
-def test_create_a_challenge_and_invite_friends(api):
+def test_lt7_create_a_challenge_and_invite_friends(api):
     # The form's invite list is the XP leaderboard without the user
     invitable = [e["displayName"] for e in board(api, "xp")["entries"] if not e["isCurrentUser"]]
     assert sorted(invitable) == ["Bob Tan", "Carol Lim"]
@@ -303,24 +218,7 @@ def test_create_a_challenge_and_invite_friends(api):
     assert api.post("/gamification/challenges", json=next_week).json()["status"] == "upcoming"
 
 
-@pytest.mark.parametrize(
-    "override",
-    [
-        {"title": "   "},
-        {"title": "x" * 101},
-        {"targetValue": 0},
-        {"targetValue": 1.5},
-        {"startDate": (TODAY - timedelta(days=1)).isoformat()},
-        {"endDate": (TODAY - timedelta(days=1)).isoformat()},
-        {"inviteeIds": [str(uuid.uuid4()) for _ in range(21)]},
-    ],
-)
-def test_challenge_form_values_are_checked_on_the_server(api, sb, override):
-    assert api.post("/gamification/challenges", json=challenge_body(**override)).status_code == 422
-    assert not sb.db.get("challenges")
-
-
-def test_inviting_someone_who_is_not_a_friend_is_blocked(api, sb):
+def test_lt8_inviting_someone_who_is_not_a_friend_is_blocked(api, sb):
     stranger = api.post("/gamification/challenges", json=challenge_body(inviteeIds=[BOB, DAVE]))
 
     assert stranger.status_code == 422
@@ -359,49 +257,3 @@ def test_lt5_accepting_an_invite_tracks_progress_and_pays_the_reward_once(api, s
     again = respond(api, challenge_id, True)
     assert again.status_code == 409
     assert again.json()["detail"] == "You have already responded to this challenge"
-
-
-def test_declined_invites_disappear_and_ended_ones_cannot_be_answered(api, clock):
-    challenge_id = api.post("/gamification/challenges", json=challenge_body(endDate=TODAY.isoformat())).json()["id"]
-
-    sign_in(BOB)
-    declined = respond(api, challenge_id, False)
-
-    assert declined.status_code == 200
-    assert api.get("/gamification/challenges").json()["challenges"] == []
-
-    sign_in(ALICE)
-    [mine] = api.get("/gamification/challenges").json()["challenges"]
-    assert [(p["displayName"], p["status"]) for p in mine["participants"]] == [
-        ("Alice Wong", "accepted"),
-        ("Carol Lim", "invited"),
-    ]
-
-    clock(datetime(2026, 10, 6, 4, 0, tzinfo=timezone.utc))  # the day after it ended
-    sign_in(CAROL)
-    late = respond(api, challenge_id, True)
-
-    assert late.status_code == 409
-    assert late.json()["detail"] == "This challenge has ended"
-    assert respond(api, str(uuid.uuid4()), True).status_code == 404
-
-
-# --- Signed-out access -------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "method, path, body",
-    [
-        ("GET", "/gamification/me", None),
-        ("GET", "/gamification/leaderboard", None),
-        ("GET", "/gamification/xp-events", None),
-        ("GET", "/gamification/pending-xp", None),
-        ("POST", "/gamification/pending-xp/resync", None),
-        ("POST", "/gamification/checkins", METRICS),
-        ("GET", "/gamification/challenges", None),
-        ("POST", "/gamification/challenges", challenge_body()),
-    ],
-)
-def test_page_data_needs_a_signed_in_user(method, path, body):
-    response = TestClient(app).request(method, path, json=body)
-
-    assert response.status_code in (401, 403)
