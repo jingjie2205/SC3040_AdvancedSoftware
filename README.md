@@ -77,12 +77,24 @@ Start-Process ".\coverage\index.html"
 
 ### Backend — Pytest
 
-Install the coverage plugin once if it is not already available:
+Use Python 3.11 or newer. From a fresh checkout, create an environment and
+install the backend requirements before running tests:
 
 ```powershell
 cd "backend"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade -r requirements.txt
+python -m pip check
 python -m pip install pytest-cov
 ```
+
+Tests use placeholder Supabase settings and mocked services; no `.env`, API
+keys, or running database is required. A Git pull does not update installed
+packages. If the HEIF test reports `HeifImageFile` has no attribute `_im`, update
+the requirements in the same Python environment used to run pytest. Pillow
+10.4.0 with pillow-heif 1.8.1 reproduces that error; a clean installation with
+Pillow 13.0.0 and pillow-heif 1.8.1 passes.
 
 Run all the backend tests and generate terminal and HTML coverage
 reports:
