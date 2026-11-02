@@ -1,9 +1,10 @@
 "use client";
 
 import { Session } from "@supabase/supabase-js";
+import { useRouter } from "next/navigation";
 import { useMemo, useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { getMyCheckIns, checkIn } from "../../../../lib/checkin/api";
+import { getMyCheckIns } from "../../../../lib/checkin/api";
 import "../../../assets/calendar.css";
 
 function calculateStreak(dates: string[]): number {
@@ -48,6 +49,7 @@ function calculateStreak(dates: string[]): number {
 }
 
 export default function CheckInCalendar() {
+  const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [checkInDates, setCheckInDates] = useState<string[]>([]);
   const [streak, setStreak] = useState(0);
@@ -119,16 +121,9 @@ export default function CheckInCalendar() {
     return checkInDates.includes(dateISO);
   }
 
-  async function handleCheckIn() {
-    if (!session || hasCheckedInToday) return;
-
-    try {
-      const updatedCheckIns = await checkIn(session.access_token);
-      setCheckInDates(updatedCheckIns.dates);
-      setStreak(calculateStreak(updatedCheckIns.dates));
-    } catch (err) {
-      setError("Failed to check in. You may have already checked in today.");
-    }
+  // Checking in means answering the daily questionnaire, which lives on the leaderboard page.
+  function handleCheckIn() {
+    if (!hasCheckedInToday) router.push("/dashboard/leaderboard");
   }
 
   if (isLoading) {
@@ -172,21 +167,22 @@ export default function CheckInCalendar() {
         {dates.map((date) => {
           const checkedIn = isCheckedIn(date);
           const currentDay = isToday(date);
+          const futureDay = date > today;
 
           return (
             <div
               key={date.toISOString()}
               className={`checkin-day
-                ${checkedIn ? "checked-in" : "missed"}
+                ${checkedIn ? "checked-in" : futureDay ? "future" : "missed"}
                 ${currentDay ? "today" : ""}
               `}
             >
               <span className="checkin-date">{date.getDate()}</span>
               {checkedIn ? (
                 <span className="checkin-mark">✓</span>
-              ) : (
+              ) : !futureDay ? (
                 <span className="missed-checkin-mark">✗</span>
-              )}
+              ) : null}
             </div>
           );
         })}

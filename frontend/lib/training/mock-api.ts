@@ -4,21 +4,37 @@
  *
  * Everything here is a stand-in: the real server owns generation, readiness and the rules.
  */
-import { TRAINING_RULES as R } from "./config";
+import { FORECAST_RULES as F, TRAINING_RULES as R } from "./config";
 import { addDays, diffDays, startOfWeek, todayISO } from "./dates";
+import { acwrOf, buildForecast, fmt, forecastView, type LoadForecast } from "./forecast";
 import {
   baselineFromHistory,
   buildSessions,
   firstUnsafeWeek,
   planEndDate,
+  planWeekTarget,
   rescaleForBand,
+  sessionsPerWeek,
+  shareWeek,
+  weekPool,
   weeklyTargets,
+  weightOf,
 } from "./mock-plan";
-import { LOGGABLE_STATUSES, MOVABLE_STATUSES, checkMove } from "./rules";
 import {
+  LOGGABLE_STATUSES,
+  MOVABLE_STATUSES,
+  bandRefusal,
+  checkMove,
+  checkPlacement,
+  defaultDurationMin,
+  isDeloadWeek,
+} from "./rules";
+import {
+  addSessionSchema,
   fieldErrorsFrom,
   generatePlanSchema,
   logWorkoutSchema,
+  sessionChangeSchema,
   sleepSchema,
   trainingPreferencesSchema,
 } from "./schemas";
@@ -27,6 +43,7 @@ import type { ApiError, ApiResult, LogResult, TrainingApi } from "./api";
 import type {
   CoachMessage,
   Goal,
+  ForecastView,
   IntensityBand,
   ModelInfo,
   NextSession,
@@ -88,11 +105,48 @@ function mockGoal(): Goal | null {
   return asked === "lose_weight" || asked === "build_muscle" || asked === "maintain" ? asked : "maintain";
 }
 
-function makeWorkout(fields: Omit<WorkoutSession, "id" | "createdAt">): WorkoutSession {
-  return { id: nextId("w"), createdAt: new Date().toISOString(), ...fields };
+/** The athlete's load forecast as of `today`, from what they logged (Strava never exists in the fixtures). */
+function currentForecast(s: MockState, today: string): LoadForecast {
+  const since = addDays(startOfWeek(today), -7 * Math.max(F.windowWeeks, F.adherenceWindowWeeks));
+  const workouts = s.workouts.filter((w) => w.date >= since && w.date <= today);
+  const sessions = s.sessions.filter((x) => x.date >= since && x.date < startOfWeek(today));
+  return buildForecast(workouts, sessions, acwrOf(workouts, today), today);
 }
 
-/** Three logged sessions a week for the 4 weeks before `endExclusive` (a Monday). */
+/** The weekly targets for a plan and the progression they use: the forecast's, or the standard if that isn't safe. */
+function planTargets(baseline: number, weeks: number, weekOffset: number, forecast: LoadForecast) {
+  const learned = weeklyTargets(baseline, weeks, weekOffset, forecast.ratePct);
+  if (firstUnsafeWeek(learned) === -1) return { targets: learned, progression: forecast.ratePct };
+  return {
+    targets: weeklyTargets(baseline, weeks, weekOffset, R.weeklyProgressionPct),
+    progression: R.weeklyProgressionPct,
+  };
+}
+
+/**
+ * The session Today shows when a day holds several: the first one still to do, otherwise the first, in a fixed order
+ * (the backend's `_session_for_today`).
+ */
+function sessionForToday(sessions: PlannedSession[]): PlannedSession | null {
+  const ordered = [...sessions].sort((a, b) => a.id.localeCompare(b.id));
+  return ordered.find((x) => MOVABLE_STATUSES.includes(x.status)) ?? ordered[0] ?? null;
+}
+
+/** Every workout the fixtures make is the athlete's own: Strava logs only come from the real backend. */
+function makeWorkout(
+  fields: Omit<WorkoutSession, "id" | "createdAt" | "externalId" | "distanceM"> & { distanceM?: number | null },
+): WorkoutSession {
+  return { id: nextId("w"), createdAt: new Date().toISOString(), externalId: null, distanceM: null, ...fields };
+}
+
+/**
+ * Weeks of rising load that a forecast can learn from: three logged sessions a week for the 8 weeks before
+ * `endExclusive` (a Monday), each week a little heavier than the last apart from one lighter week.
+ */
+const SEED_WEEK_FACTORS = [0.8, 0.84, 0.88, 0.84, 0.92, 0.96, 1.0, 1.04];
+
+const toMetres = (km: number | null) => (km === null ? null : Math.round(km * 10000) / 10);
+
 function seedHistory(endExclusive: string): WorkoutSession[] {
   const pattern = [
     { day: 0, activityType: "run", volume: 34 },
@@ -100,9 +154,11 @@ function seedHistory(endExclusive: string): WorkoutSession[] {
     { day: 5, activityType: "cycling", volume: 36 },
   ] as const;
   const history: WorkoutSession[] = [];
-  for (let week = 4; week >= 1; week--) {
+  for (let week = SEED_WEEK_FACTORS.length; week >= 1; week--) {
     const monday = addDays(endExclusive, -7 * week);
-    for (const { day, activityType, volume } of pattern) {
+    const factor = SEED_WEEK_FACTORS[SEED_WEEK_FACTORS.length - week];
+    for (const { day, activityType, volume: standard } of pattern) {
+      const volume = Math.round(standard * factor);
       history.push(
         makeWorkout({
           plannedSessionId: null,
@@ -138,6 +194,12 @@ function seedState(scenario: "active" | "new"): MockState {
   const weeks = 8;
   const workouts = seedHistory(planStart);
   const baseline = baselineFromHistory(workouts, planStart);
+  const seeded = planTargets(
+    baseline.volume,
+    weeks,
+    0,
+    buildForecast(workouts, [], acwrOf(workouts, planStart), planStart),
+  );
   const plan: TrainingPlan = {
     id: nextId("p"),
     startDate: planStart,
@@ -149,13 +211,14 @@ function seedState(scenario: "active" | "new"): MockState {
     notice: PLAN_NOTICE,
     goal: mockGoal(),
     lastAdaptation: null,
+    progressionPct: seeded.progression,
   };
 
   let pastIndex = 0;
   const drafts = buildSessions({
     prefs: SEED_PREFERENCES,
     startDate: planStart,
-    targets: weeklyTargets(baseline.volume, weeks),
+    targets: seeded.targets,
     fromDate: planStart,
     goal: plan.goal,
   });
@@ -339,6 +402,35 @@ function reconcile(planned: PlannedSession, readiness: ReadinessScore): SessionR
   };
 }
 
+/** Every session the fixtures hold, whichever plan it belongs to: a finished session of an old plan still takes its day. */
+function placementContext(s: MockState, plan: TrainingPlan) {
+  return { sessions: s.sessions, planStart: plan.startDate, planEnd: plan.endDate, today: todayISO() };
+}
+
+const weightsOf = (sessions: PlannedSession[]) =>
+  sessions.map((x) => ({ id: x.id, volume: x.targetVolume, weight: weightOf(x.intensityBand, x.targetDurationMin) }));
+
+/** A hand-planned session uses one of the athlete's own activities and an intensity its week allows. */
+function detailProblems(
+  plan: TrainingPlan,
+  preferences: TrainingPreferences,
+  weekMonday: string,
+  activityType: PlannedSession["activityType"] | undefined,
+  band: IntensityBand | undefined,
+): ApiResult<never> | null {
+  const fieldErrors: Record<string, string> = {};
+  if (activityType !== undefined && !preferences.activityTypes.includes(activityType)) {
+    fieldErrors.activityType = "Pick one of your preferred activity types";
+  }
+  if (band !== undefined) {
+    const why = bandRefusal(band, isDeloadWeek(plan, weekMonday));
+    if (why) fieldErrors.intensityBand = why;
+  }
+  return Object.keys(fieldErrors).length > 0
+    ? fail("VALIDATION", "Check the highlighted fields.", { fieldErrors })
+    : null;
+}
+
 function validateLog(input: LogWorkoutInput): ApiResult<LogWorkoutInput> {
   const parsed = logWorkoutSchema.safeParse(input);
   if (!parsed.success) {
@@ -370,7 +462,7 @@ function planSnapshot(s: MockState) {
   const mine = (plan ? s.sessions.filter((x) => x.planId === plan.id) : []).sort((a, b) =>
     a.date.localeCompare(b.date),
   );
-  const session = mine.find((x) => x.date === today) ?? null;
+  const session = sessionForToday(mine.filter((x) => x.date === today));
   const week = mine.filter((x) => x.date >= monday && x.date <= sunday);
   const state: TodayState = !plan
     ? "no_plan"
@@ -477,7 +569,12 @@ export const mockTrainingApi: TrainingApi = {
     }
 
     const baseline = baselineFromHistory(s.workouts, today);
-    const targets = weeklyTargets(baseline.volume, parsed.data.weeks);
+    const { targets, progression } = planTargets(
+      baseline.volume,
+      parsed.data.weeks,
+      0,
+      currentForecast(s, today),
+    );
     const unsafeWeek = firstUnsafeWeek(targets);
     if (unsafeWeek !== -1) {
       return fail(
@@ -498,6 +595,7 @@ export const mockTrainingApi: TrainingApi = {
       notice: PLAN_NOTICE,
       goal: mockGoal(),
       lastAdaptation: null,
+      progressionPct: progression,
     };
     // Only sessions still to do are dropped; anything already completed, partial or missed is history.
     const previous = s.plan;
@@ -531,7 +629,12 @@ export const mockTrainingApi: TrainingApi = {
     const monday = startOfWeek(today);
     const weeksElapsed = diffDays(monday, plan.startDate) / 7;
     const remainingWeeks = plan.weeks - weeksElapsed;
-    const targets = weeklyTargets(baseline.volume, remainingWeeks, weeksElapsed);
+    const { targets, progression } = planTargets(
+      baseline.volume,
+      remainingWeeks,
+      weeksElapsed,
+      currentForecast(s, today),
+    );
 
     s.sessions = s.sessions.filter(
       (x) => !(x.planId === plan.id && x.date >= today && MOVABLE_STATUSES.includes(x.status)),
@@ -546,14 +649,19 @@ export const mockTrainingApi: TrainingApi = {
     const previousBaseline = plan.baselineVolume;
     plan.baselineVolume = baseline.volume;
     plan.goal = mockGoal();
+    plan.progressionPct = progression;
+    const pace =
+      progression !== R.weeklyProgressionPct
+        ? ` Weekly progression is now ${fmt(progression)}% instead of the standard ${fmt(R.weeklyProgressionPct)}%: see the load forecast on the Plan tab.`
+        : "";
     plan.lastAdaptation = {
       trigger: "manual",
       adaptedAt: new Date().toISOString(),
       adaptedOn: today,
       acknowledged: false,
-      reason: baseline.usedDefault
+      reason: (baseline.usedDefault
         ? `You have fewer than ${R.minHistoryWeeksForBaseline} weeks of completed training in the last 4 weeks, so a conservative default of ${baseline.volume} pts/week was used. Only the remaining ${remainingWeeks} week(s) were regenerated.`
-        : `Rebaselined from your ${baseline.sessionCount} completed sessions in the last 4 weeks: ${previousBaseline} to ${baseline.volume} pts/week. Only the remaining ${remainingWeeks} week(s) were regenerated.`,
+        : `Rebaselined from your ${baseline.sessionCount} completed sessions in the last 4 weeks: ${previousBaseline} to ${baseline.volume} pts/week. Only the remaining ${remainingWeeks} week(s) were regenerated.`) + pace,
     };
     return ok(plan);
   },
@@ -562,6 +670,13 @@ export const mockTrainingApi: TrainingApi = {
     await delay(50);
     const adaptation = getState().plan?.lastAdaptation;
     if (adaptation) adaptation.acknowledged = true;
+  },
+
+  async getForecast() {
+    await delay();
+    const s = getState();
+    const view: ForecastView = forecastView(currentForecast(s, todayISO()), s.plan?.progressionPct ?? null);
+    return clone(view);
   },
 
   async getSchedule(from, to) {
@@ -582,15 +697,127 @@ export const mockTrainingApi: TrainingApi = {
     if (!plan || session.planId !== plan.id) {
       return fail("NOT_MOVABLE", "Sessions from a replaced plan can't be moved.");
     }
-    const check = checkMove(session, newDate, {
-      sessions: s.sessions.filter((x) => x.planId === plan.id),
-      planStart: plan.startDate,
-      planEnd: plan.endDate,
-      today: todayISO(),
-    });
+    const check = checkMove(session, newDate, placementContext(s, plan));
     if (!check.ok) return fail(check.code, check.reason, { suggestedDate: check.suggestedDate });
     session.date = newDate;
     session.status = "moved";
+    return ok(session);
+  },
+
+  async addSession(input) {
+    await delay();
+    const s = getState();
+    const plan = s.plan;
+    if (!plan) return fail("NO_PLAN", "Generate a training plan first, then you can plan sessions in it.");
+    if (!s.preferences) return fail("NO_PREFERENCES", "Set your training preferences before planning sessions.");
+    const parsed = addSessionSchema.safeParse(input);
+    if (!parsed.success) {
+      return fail("VALIDATION", "Check the highlighted fields.", { fieldErrors: fieldErrorsFrom(parsed.error) });
+    }
+    const { date, activityType, intensityBand, targetDurationMin } = parsed.data;
+    const monday = startOfWeek(date);
+    const unsuitable = detailProblems(plan, s.preferences, monday, activityType, intensityBand);
+    if (unsuitable) return unsuitable;
+
+    const duration = targetDurationMin ?? defaultDurationMin(s.preferences.sessionDurationMin, intensityBand);
+    const draft: PlannedSession = {
+      id: nextId("s"),
+      planId: plan.id,
+      date,
+      activityType,
+      targetVolume: 0,
+      targetDurationMin: duration,
+      intensityBand,
+      status: "planned",
+    };
+    const check = checkPlacement(draft, date, placementContext(s, plan));
+    if (!check.ok) return fail(check.code, check.reason, { suggestedDate: check.suggestedDate });
+
+    const week = s.sessions.filter((x) => x.planId === plan.id && startOfWeek(x.date) === monday);
+    const movable = week.filter((x) => MOVABLE_STATUSES.includes(x.status));
+    const pool = weekPool(
+      planWeekTarget(plan, monday) ?? 0,
+      week.filter((x) => !MOVABLE_STATUSES.includes(x.status)).reduce((sum, x) => sum + x.targetVolume, 0), // done or missed
+      movable.reduce((sum, x) => sum + x.targetVolume, 0),
+      movable.length + 1,
+      sessionsPerWeek(s.preferences),
+    );
+    if (pool < movable.length + 1) {
+      return fail(
+        "WEEK_FULL",
+        "That week's training load is already planned or done, so there's nothing left to share with another session. Pick another week, or log it as an extra workout once you've done it.",
+      );
+    }
+
+    const share = shareWeek(pool, weightsOf(movable), weightOf(intensityBand, duration));
+    const adjusted = movable.filter((x) => share.others[x.id] !== x.targetVolume);
+    for (const x of adjusted) x.targetVolume = share.others[x.id];
+    const added: PlannedSession = { ...draft, targetVolume: share.newVolume };
+    s.sessions.push(added);
+    return ok({ session: added, adjustedCount: adjusted.length });
+  },
+
+  async updateSession(id, change) {
+    await delay();
+    const s = getState();
+    const plan = s.plan;
+    const parsed = sessionChangeSchema.safeParse(change);
+    if (!parsed.success) {
+      return fail("VALIDATION", "Check the highlighted fields.", { fieldErrors: fieldErrorsFrom(parsed.error) });
+    }
+    const session = s.sessions.find((x) => x.id === id);
+    if (!session) return fail("NOT_FOUND", "That session no longer exists.");
+    if (!plan || session.planId !== plan.id) {
+      return fail("NOT_MOVABLE", "Sessions from a replaced plan can't be changed.");
+    }
+    if (!MOVABLE_STATUSES.includes(session.status)) {
+      return fail("NOT_MOVABLE", "Completed, partial and missed sessions can't be changed.");
+    }
+
+    const activityType = parsed.data.activityType ?? session.activityType;
+    const intensityBand = parsed.data.intensityBand ?? session.intensityBand;
+    const targetDurationMin = parsed.data.targetDurationMin ?? session.targetDurationMin;
+    const newActivity = activityType !== session.activityType;
+    const newBand = intensityBand !== session.intensityBand;
+    const newLength = targetDurationMin !== session.targetDurationMin;
+    if (!newActivity && !newBand && !newLength) {
+      return fail("NO_CHANGE", "That session already looks like that.");
+    }
+    if (!s.preferences) {
+      return fail("NO_PREFERENCES", "Set your training preferences before changing a session.");
+    }
+
+    const monday = startOfWeek(session.date);
+    const unsuitable = detailProblems(
+      plan,
+      s.preferences,
+      monday,
+      newActivity ? activityType : undefined,
+      newBand ? intensityBand : undefined,
+    );
+    if (unsuitable) return unsuitable;
+    if (newBand) {
+      // Only the intensity can break a day rule where the session already stands: a push beside a push.
+      const check = checkPlacement({ ...session, intensityBand }, session.date, placementContext(s, plan));
+      if (!check.ok) return fail(check.code, check.reason);
+    }
+
+    let volume = session.targetVolume;
+    if (newBand || newLength) {
+      // A different weight changes this session's share of the week; the week's total stays what it was.
+      const movable = s.sessions.filter(
+        (x) => x.planId === plan.id && startOfWeek(x.date) === monday && MOVABLE_STATUSES.includes(x.status),
+      );
+      const others = movable.filter((x) => x.id !== session.id);
+      const share = shareWeek(
+        movable.reduce((sum, x) => sum + x.targetVolume, 0),
+        weightsOf(others),
+        weightOf(intensityBand, targetDurationMin),
+      );
+      for (const x of others) x.targetVolume = share.others[x.id];
+      volume = share.newVolume;
+    }
+    Object.assign(session, { activityType, intensityBand, targetDurationMin, targetVolume: volume });
     return ok(session);
   },
 
@@ -623,7 +850,7 @@ export const mockTrainingApi: TrainingApi = {
     const today = todayISO();
     const plan = s.plan;
     const planned = plan
-      ? (s.sessions.find((x) => x.planId === plan.id && x.date === today) ?? null)
+      ? sessionForToday(s.sessions.filter((x) => x.planId === plan.id && x.date === today))
       : null;
     const readiness = readinessFor(
       today,
@@ -717,7 +944,13 @@ export const mockTrainingApi: TrainingApi = {
     const valid = validateLog(input);
     if (!valid.ok) return valid;
 
-    const workout = makeWorkout({ plannedSessionId: session.id, ...valid.data, source: "manual", calories: valid.data.actualDurationMin * 8 });
+    const { distanceKm, ...logged } = valid.data;
+    const workout = makeWorkout({
+      plannedSessionId: session.id,
+      ...logged,
+      distanceM: toMetres(distanceKm),
+      source: "manual",
+    });
     s.workouts.push(workout);
     session.status =
       workout.actualVolume >= R.partialCompletionRatio * session.targetVolume
@@ -755,10 +988,11 @@ export const mockTrainingApi: TrainingApi = {
     await delay();
     const valid = validateLog(input);
     if (!valid.ok) return valid;
+    const { distanceKm, ...logged } = valid.data;
     const workout = makeWorkout({
       plannedSessionId: null,
-      ...valid.data,
-      calories: valid.data.actualDurationMin * 8,
+      ...logged,
+      distanceM: toMetres(distanceKm),
       source: "manual",
     });
     getState().workouts.push(workout);

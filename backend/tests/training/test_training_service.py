@@ -359,8 +359,8 @@ def test_a_move_that_makes_two_push_days_in_a_row_is_refused_with_a_suggestion()
     error = error_of(lambda: service.reschedule_session(USER_A, TODAY, saturday_push.id, sunday))
 
     assert error.code == "CONSECUTIVE_HIGH_INTENSITY"
-    assert error.suggested_date == date(2026, 10, 8)  # Thursday: Fri and Wed are taken, Tue touches Monday
-    assert error.detail["suggestedDate"] == "2026-10-08"
+    assert error.suggested_date == date(2026, 10, 9)  # Friday: a day may hold several sessions, Tue touches Monday
+    assert error.detail["suggestedDate"] == "2026-10-09"
     moved = service.reschedule_session(USER_A, TODAY, saturday_push.id, error.suggested_date)
     assert moved.date == error.suggested_date
 
@@ -475,6 +475,28 @@ def test_ad_hoc_sessions_are_logged_without_a_plan_entry():
     assert repo.list_workouts(USER_A, TODAY, TODAY)[0].id == result.workout.id
 
 
+def test_calories_the_athlete_enters_are_kept_on_the_log_and_come_back_with_the_schedule():
+    service, repo, _ = with_plan()
+    wed = repo.list_sessions(USER_A, TODAY, TODAY)[0]
+    planned = service.log_session(USER_A, TODAY, wed.id, log_input(TODAY, wed.target_volume, calories=410))
+    ad_hoc = service.log_ad_hoc_session(USER_A, TODAY, log_input(TODAY, 20, calories=250))
+    plain = service.log_ad_hoc_session(USER_A, TODAY, log_input(TODAY, 20))
+    assert (planned.workout.calories, ad_hoc.workout.calories, plain.workout.calories) == (410, 250, None)
+    assert repo.get_workout_for_session(USER_A, wed.id).calories == 410
+
+    shown = service.get_schedule(USER_A, TODAY, TODAY, TODAY).workouts
+    assert sorted(w.calories for w in shown if w.calories is not None) == [250, 410]
+    assert any(w.calories is None for w in shown), "a log with no calories stays empty; nothing is estimated"
+
+
+def test_calories_are_a_whole_number_within_the_configured_limit():
+    for bad in (-1, RULES.workout_calories_max + 1):
+        with pytest.raises(ValueError):
+            log_input(TODAY, 20, calories=bad)
+    assert log_input(TODAY, 20, calories=0).calories == 0
+    assert log_input(TODAY, 20, calories=RULES.workout_calories_max).calories == RULES.workout_calories_max
+
+
 # ------------------------------------------------------------------ isolation (Hard Rule 4 and scoping)
 
 
@@ -507,3 +529,20 @@ def test_replacing_one_users_plan_does_not_touch_the_other():
     service.generate_plan(USER_B, TODAY, GeneratePlanRequest(weeks=4))
     service.generate_plan(USER_B, TODAY, GeneratePlanRequest(weeks=4, confirm_replace=True))
     assert service.get_plan(USER_A, TODAY).id == plan_a.id
+
+
+def test_a_distance_the_athlete_enters_is_kept_in_metres_on_the_log():
+    service, repo, _ = with_plan()
+    run = service.log_ad_hoc_session(USER_A, TODAY, log_input(TODAY, 20, distance_km=5.23))
+    plain = service.log_ad_hoc_session(USER_A, TODAY, log_input(TODAY, 20))
+    assert (run.workout.distance_m, plain.workout.distance_m) == (5230.0, None)
+
+
+def test_a_distance_is_only_for_runs_and_rides_and_within_the_limit():
+    with pytest.raises(ValueError):
+        LogWorkoutInput(date=TODAY, activity_type="gym", actual_duration_min=30, actual_volume=20, distance_km=3)
+    for bad in (0, -1, RULES.workout_distance_km_max + 1):
+        with pytest.raises(ValueError):
+            log_input(TODAY, 20, distance_km=bad)
+    ride = LogWorkoutInput(date=TODAY, activity_type="cycling", actual_duration_min=60, actual_volume=40, distance_km=30)
+    assert ride.distance_km == 30

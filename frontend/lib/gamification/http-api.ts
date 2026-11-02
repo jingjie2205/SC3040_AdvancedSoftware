@@ -7,7 +7,15 @@
  */
 import { GAMIFICATION_RULES as R } from "./config";
 import type { ApiError, ApiResult, GamificationApi } from "./api";
-import type { Challenge, CheckInResult, GamificationStats, Leaderboard } from "./types";
+import type {
+  Challenge,
+  CheckInResult,
+  GamificationStats,
+  Leaderboard,
+  PendingXp,
+  PendingXpResync,
+  XpEvent,
+} from "./types";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 const BASE_URL = `${BACKEND_URL}/gamification`;
@@ -89,6 +97,9 @@ async function read<T>(path: string): Promise<T> {
 
 export const httpGamificationApi: GamificationApi = {
   getStats: () => read<GamificationStats>("/me"),
+  getXpHistory: async () => (await read<{ events: XpEvent[] }>("/xp-events")).events,
+  getPendingXp: () => read<PendingXp>("/pending-xp"),
+  resyncPendingXp: () => request<PendingXpResync>("POST", "/pending-xp/resync"),
   checkIn: (input) => request<CheckInResult>("POST", "/checkins", input),
   getLeaderboard: (metric) =>
     read<Leaderboard>(`/leaderboard?metric=${metric}&limit=${R.leaderboardLimit}`),

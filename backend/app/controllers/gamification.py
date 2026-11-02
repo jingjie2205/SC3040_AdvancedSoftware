@@ -11,6 +11,9 @@ from app.models.gamification import (
     GamificationStatsResponse,
     LeaderboardMetric,
     LeaderboardResponse,
+    PendingXpResponse,
+    PendingXpResyncResponse,
+    XpHistoryResponse,
 )
 from app.commons.auth.deps import get_current_user_id, get_supabase_admin
 from app.services import gamification as gamification_service
@@ -24,6 +27,24 @@ async def get_my_stats(user_id: str = Depends(get_current_user_id)) -> Any:
     return gamification_service.get_stats(
         get_supabase_admin(), user_id, gamification_service.today_local()
     )
+
+
+@router.get("/xp-events", response_model=XpHistoryResponse)
+async def get_my_xp_history(user_id: str = Depends(get_current_user_id)) -> Any:
+    """The user's most recent XP awards, newest first."""
+    return {"events": gamification_service.get_xp_history(get_supabase_admin(), user_id)}
+
+
+@router.get("/pending-xp", response_model=PendingXpResponse)
+async def get_my_pending_xp(user_id: str = Depends(get_current_user_id)) -> Any:
+    """XP held back because a workout or meal failed a check, with the reason for each."""
+    return gamification_service.get_pending_xp(get_supabase_admin(), user_id)
+
+
+@router.post("/pending-xp/resync", response_model=PendingXpResyncResponse)
+async def resync_my_pending_xp(user_id: str = Depends(get_current_user_id)) -> Any:
+    """Check held XP again and pay whatever now passes."""
+    return gamification_service.resync_pending_xp(get_supabase_admin(), user_id)
 
 
 @router.post("/checkins", response_model=DailyCheckInResponse, status_code=status.HTTP_201_CREATED)
@@ -49,11 +70,11 @@ async def get_leaderboard(
     limit: int = Query(10, ge=1, le=50),
     user_id: str = Depends(get_current_user_id),
 ) -> Any:
-    # TODO: restrict to the user's friends once the friends table (F-1) exists; global for now.
-    entries = gamification_service.get_leaderboard(
+    """The user and their friends, ranked by XP or by current check-in streak."""
+    board = gamification_service.get_leaderboard(
         get_supabase_admin(), user_id, metric, limit, gamification_service.today_local()
     )
-    return {"metric": metric, "entries": entries}
+    return {"metric": metric, **board}
 
 
 @router.get("/challenges", response_model=ChallengeListResponse)

@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 # Postgres and PostgREST codes for "that table or column doesn't exist (yet)".
 _SCHEMA_NOT_READY = {"42P01", "42703", "PGRST204", "PGRST205"}
+# ...and for "that function doesn't exist (yet)": PostgREST's own code, and Postgres's undefined_function.
+_FUNCTION_NOT_READY = _SCHEMA_NOT_READY | {"PGRST202", "42883"}
 
 # The check-in questionnaire dates a check-in with a fixed UTC+8 day, while "today" here is the
 # user's own local date. For someone west of Singapore a check-in made this evening can be dated
@@ -98,6 +100,8 @@ class TrainingRepository(Protocol):
 
     def apply(self, user_id: str, changes: ChangeSet) -> None: ...
 
+    def supports_plan_progression(self) -> bool: ...
+
 
 def changes_payload(changes: ChangeSet) -> Dict[str, Any]:
     """JSON for the `training_apply_changes` function. Rows carry no user id; the function adds it."""
@@ -113,6 +117,7 @@ def changes_payload(changes: ChangeSet) -> Dict[str, Any]:
 class SupabaseTrainingRepository:
     def __init__(self, client: Client) -> None:
         self.db = client
+        self._features_ready: Set[str] = set()  # optional log columns the database has said it keeps
 
     # ------------------------------------------------------------------ helpers
 
@@ -317,10 +322,68 @@ class SupabaseTrainingRepository:
     # ------------------------------------------------------------------ writes
 
     def apply(self, user_id: str, changes: ChangeSet) -> None:
+        if any(workout.calories is not None for workout in changes.insert_workouts):
+            self._require_feature(
+                "calories",
+                "Calories aren't set up on this database yet. Apply the latest training migration, "
+                "or log the workout without calories.",
+            )
+        if any(workout.distance_m is not None for workout in changes.insert_workouts):
+            self._require_feature(
+                "distance",
+                "Distance isn't set up on this database yet. Apply the latest training migration, "
+                "or log the workout without a distance.",
+            )
+        if any(plan.progression_pct is not None for plan in changes.upsert_plans) and not self.supports_plan_progression():
+            raise TrainingError(
+                "UNAVAILABLE",
+                "Weekly progression isn't set up on this database yet. Apply the latest training migration.",
+            )
         self.db.rpc(
             "training_apply_changes",
             {"p_user_id": user_id, "p_changes": changes_payload(changes)},
         ).execute()
+
+    def supports_plan_progression(self) -> bool:
+        """
+        Whether the write function keeps a plan's weekly progression. The migration that adds the column also makes
+        `training_schema_features()` say so; the column alone doesn't prove the function writes it. Until it does, plans
+        are built at the standard rate and nothing is dropped quietly. Only a yes is remembered, so applying the
+        migration takes effect without a restart.
+        """
+        if "progression" in self._features_ready:
+            return True
+        try:
+            features = self.db.rpc("training_schema_features", {}).execute().data
+        except APIError as error:
+            if error.code not in _FUNCTION_NOT_READY:
+                raise
+            return False
+        if isinstance(features, dict) and features.get("progression") is True:
+            self._features_ready.add("progression")
+            return True
+        return False
+
+    def _require_feature(self, feature: str, refusal_message: str) -> None:
+        """
+        The write function skips keys it doesn't know, so on a database whose write function predates a column's
+        migration a log would save and the value the athlete typed (calories, distance) would quietly vanish, even if
+        someone has added the column by hand (the live project had, for calories). The migrations add
+        training_schema_features(); ask it first and refuse instead. Once a feature has been confirmed it isn't
+        asked about again.
+        """
+        if feature in self._features_ready:
+            return
+        refusal = TrainingError("UNAVAILABLE", refusal_message)
+        try:
+            features = self.db.rpc("training_schema_features", {}).execute().data
+        except APIError as error:
+            if error.code not in _FUNCTION_NOT_READY:
+                raise
+            raise refusal from error
+        if not (isinstance(features, dict) and features.get(feature) is True):
+            raise refusal
+        self._features_ready.add(feature)
 
 
 class ThreadLocalClient:

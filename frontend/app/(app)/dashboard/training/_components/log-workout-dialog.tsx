@@ -6,6 +6,7 @@ import { trainingApi } from "@/lib/training/api";
 import { TRAINING_RULES as R } from "@/lib/training/config";
 import { todayISO } from "@/lib/training/dates";
 import {
+  DISTANCE_ACTIVITIES,
   fieldErrorsFrom,
   logWorkoutSchema,
   nullableNumberFromInput,
@@ -42,6 +43,8 @@ export function LogWorkoutDialog({
   const [volumeEdited, setVolumeEdited] = useState(false);
   const [rpe, setRpe] = useState("");
   const [avgHr, setAvgHr] = useState("");
+  const [calories, setCalories] = useState("");
+  const [distance, setDistance] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
@@ -52,6 +55,8 @@ export function LogWorkoutDialog({
     setVolume(Number.isFinite(minutes) ? String(Math.round(minutes * loadPerMin)) : "");
   }
 
+  const hasDistance = DISTANCE_ACTIVITIES.includes(activityType);
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const parsed = logWorkoutSchema.safeParse({
@@ -61,6 +66,8 @@ export function LogWorkoutDialog({
       actualVolume: numberFromInput(volume),
       rpe: nullableNumberFromInput(rpe),
       avgHr: nullableNumberFromInput(avgHr),
+      calories: nullableNumberFromInput(calories),
+      distanceKm: hasDistance ? nullableNumberFromInput(distance) : null,
     });
     if (!parsed.success) {
       setErrors(fieldErrorsFrom(parsed.error));
@@ -184,6 +191,39 @@ export function LogWorkoutDialog({
             />
             <FieldError message={errors.avgHr} />
           </label>
+
+          <label className="block">
+            <span className="text-xs text-slate-400">Calories burned, kcal (optional)</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={R.workout.calories.min}
+              max={R.workout.calories.max}
+              value={calories}
+              onChange={(e) => setCalories(e.target.value)}
+              aria-invalid={Boolean(errors.calories)}
+              className={inputClass}
+            />
+            <FieldError message={errors.calories} />
+          </label>
+
+          {hasDistance && (
+            <label className="block">
+              <span className="text-xs text-slate-400">Distance, km (optional)</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                max={R.workout.distanceKm.max}
+                value={distance}
+                onChange={(e) => setDistance(e.target.value)}
+                aria-invalid={Boolean(errors.distanceKm)}
+                className={inputClass}
+              />
+              <FieldError message={errors.distanceKm} />
+            </label>
+          )}
         </div>
 
         <FieldError message={errors.form} />

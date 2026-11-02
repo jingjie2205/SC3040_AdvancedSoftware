@@ -18,6 +18,7 @@ import { TRAINING_RULES as R } from "@/lib/training/config";
 import { addDays, formatDay, formatShortDate } from "@/lib/training/dates";
 import { fieldErrorsFrom, generatePlanSchema, numberFromInput } from "@/lib/training/schemas";
 import type { Goal, Schedule, TrainingPlan, TrainingPreferences } from "@/lib/training/types";
+import { ForecastCard } from "./forecast-card";
 import {
   ConfirmDialog,
   ErrorBox,
@@ -208,7 +209,7 @@ export function PlanPanel({
             </h3>
             <p className="text-xs text-slate-400">
               {plan
-                ? `${formatDay(plan.startDate)} to ${formatDay(plan.endDate)} · ${plan.weeks} weeks · baseline ${plan.baselineVolume} pts/week`
+                ? `${formatDay(plan.startDate)} to ${formatDay(plan.endDate)} · ${plan.weeks} weeks · baseline ${plan.baselineVolume} pts/week${plan.progressionPct !== null ? ` · +${plan.progressionPct.toFixed(1)}% a week` : ""}`
                 : "Built from your preferences, your profile goal and activity level, and the last 4 weeks of completed training."}
             </p>
             {plan && <GoalNote goal={plan.goal} />}
@@ -281,10 +282,13 @@ export function PlanPanel({
           <p className="mt-4 text-xs text-slate-400">
             Your plan also adapts on its own after {R.missedSessionsTrigger} missed sessions in a
             row, or {R.lowReadinessDaysTrigger} days in a row of low readiness. You&apos;ll always
-            be told when it happens and why.
+            be told when it happens and why. You can also plan sessions yourself on the Schedule tab.
+            Adapting rebuilds the weeks still to come, including those.
           </p>
         )}
       </div>
+
+      <ForecastCard plan={plan} refreshKey={refreshKey} />
 
       {plan && (
         <div className="flex gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-200">
@@ -382,8 +386,8 @@ export function PlanPanel({
           onCancel={() => setConfirm(null)}
         >
           <p>
-            A new plan replaces your current one. Sessions still to come are removed. Anything you
-            already logged stays in your history.
+            A new plan replaces your current one. Sessions still to come are removed, including any you
+            added or moved yourself. Anything you already logged stays in your history.
           </p>
         </ConfirmDialog>
       )}
@@ -398,7 +402,8 @@ export function PlanPanel({
         >
           <p>
             Your plan is rebuilt from what you actually completed, not from what was planned. Only
-            the weeks still to come change, and you&apos;ll be shown what changed and why.
+            the weeks still to come change, and sessions you added, moved or edited in them are rebuilt
+            too. You&apos;ll be shown what changed and why.
           </p>
         </ConfirmDialog>
       )}

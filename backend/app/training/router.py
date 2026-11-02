@@ -12,17 +12,20 @@ from ..commons.auth.deps import get_current_user_id
 from .clock import get_client_date
 from .coach import load_coach
 from .models import (
+    AddSessionRequest,
+    AddSessionResult,
     CoachMessage,
+    ForecastView,
     GeneratePlanRequest,
     LogResult,
     LogWorkoutInput,
     ModelInfo,
     PlannedSession,
     RemoveResult,
-    RescheduleRequest,
     Schedule,
     ScoreResult,
     SessionResponseRequest,
+    SessionUpdateRequest,
     SleepEntry,
     SleepInput,
     TodayView,
@@ -83,6 +86,15 @@ def generate_plan(body: GeneratePlanRequest, user_id: UserId, today: Today, serv
     return service.generate_plan(user_id, today, body)
 
 
+@router.get("/plan/forecast", response_model=ForecastView)
+def get_forecast(user_id: UserId, today: Today, service: Service):
+    """
+    The athlete's own weekly load, the forecast fitted to it, and the weekly progression it supports. A read: nothing
+    changes. Strava logs never count, and no readiness data is involved.
+    """
+    return service.get_forecast(user_id, today)
+
+
 @router.post("/plan/recalculate", response_model=TrainingPlan)
 def recalculate_plan(user_id: UserId, today: Today, service: Service):
     return service.recalculate_plan(user_id, today)
@@ -108,11 +120,18 @@ def get_schedule(
     return service.get_schedule(user_id, today, start, end)
 
 
+@router.post("/plan/sessions", response_model=AddSessionResult)
+def add_session(body: AddSessionRequest, user_id: UserId, today: Today, service: Service):
+    """Plan a session by hand on a free day of the active plan. The plan decides what a week carries; the session takes its share."""
+    return service.add_session(user_id, today, body)
+
+
 @router.patch("/sessions/{session_id}", response_model=PlannedSession)
-def reschedule_session(
-    session_id: UUID, body: RescheduleRequest, user_id: UserId, today: Today, service: Service
+def update_session(
+    session_id: UUID, body: SessionUpdateRequest, user_id: UserId, today: Today, service: Service
 ):
-    return service.reschedule_session(user_id, today, str(session_id), body.date)
+    """Either `{date}` to move the session, or any of `{activityType, intensityBand, targetDurationMin}` to change it."""
+    return service.update_session(user_id, today, str(session_id), body)
 
 
 @router.delete("/sessions/{session_id}", response_model=RemoveResult)

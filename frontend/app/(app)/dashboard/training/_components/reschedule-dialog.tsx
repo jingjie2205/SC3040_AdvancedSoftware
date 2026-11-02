@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, TriangleAlert } from "lucide-react";
 import { trainingApi } from "@/lib/training/api";
-import { formatDay, todayISO } from "@/lib/training/dates";
+import { addDays, formatDay, todayISO } from "@/lib/training/dates";
 import { checkMove } from "@/lib/training/rules";
 import type { PlannedSession, TrainingPlan } from "@/lib/training/types";
 import {
@@ -37,13 +37,14 @@ export function RescheduleDialog({
   } | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // The whole plan is loaded so the early warning also sees neighbours in adjacent weeks.
+  // The whole plan, and a day either side, is loaded so the early warning also sees neighbours in adjacent
+  // weeks and anything an older plan left on a day (the database allows one session a day across all plans).
   // If it can't load, the server still checks the move. A server refusal means our copy is
   // out of date, so it is loaded again.
   useEffect(() => {
     let cancelled = false;
     trainingApi
-      .getSchedule(plan.startDate, plan.endDate)
+      .getSchedule(addDays(plan.startDate, -1), addDays(plan.endDate, 1))
       .then((data) => {
         if (!cancelled) setPlanSessions(data.sessions);
       })
@@ -59,7 +60,7 @@ export function RescheduleDialog({
     () =>
       planSessions
         ? checkMove(session, target, {
-            sessions: planSessions.filter((s) => s.planId === plan.id),
+            sessions: planSessions,
             planStart: plan.startDate,
             planEnd: plan.endDate,
             today,

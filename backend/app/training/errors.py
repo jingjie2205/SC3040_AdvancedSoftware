@@ -16,10 +16,11 @@ ErrorCode = Literal[
     "NO_CHANGE",
     "IN_PAST",
     "OUT_OF_PLAN",
-    "DAY_OCCUPIED",
     "CONSECUTIVE_HIGH_INTENSITY",
+    "WEEK_FULL",
     "UNAVAILABLE",
     "RATE_LIMITED",
+    "NOT_CONNECTED",
 ]
 
 _STATUS: Dict[str, int] = {

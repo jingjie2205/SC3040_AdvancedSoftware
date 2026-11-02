@@ -7,6 +7,7 @@
  */
 import { todayISO } from "./dates";
 import type {
+  AddSessionResult,
   ApiError,
   ApiErrorCode,
   ApiResult,
@@ -16,6 +17,7 @@ import type {
 } from "./api";
 import type {
   CoachMessage,
+  ForecastView,
   ModelInfo,
   PlannedSession,
   Schedule,
@@ -80,7 +82,7 @@ function sendToSignIn() {
   }
 }
 
-async function buildHeaders(): Promise<Record<string, string>> {
+export async function buildHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "X-Client-Date": todayISO(),
@@ -96,7 +98,7 @@ async function buildHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
-async function request<T>(
+export async function request<T>(
   method: string,
   path: string,
   body?: unknown,
@@ -150,9 +152,12 @@ export const httpTrainingApi: TrainingApi = {
   },
 
   getSchedule: (from, to) => read<Schedule>(`/schedule?from=${from}&to=${to}`),
+  getForecast: () => read<ForecastView>("/plan/forecast"),
   rescheduleSession: (id, newDate) =>
     request<PlannedSession>("PATCH", sessionPath(id), { date: newDate }),
   removeSession: (id) => request<RemoveResult>("DELETE", sessionPath(id)),
+  addSession: (input) => request<AddSessionResult>("POST", "/plan/sessions", input),
+  updateSession: (id, change) => request<PlannedSession>("PATCH", sessionPath(id), change),
 
   getToday: () => read<TodayView>("/today"),
   getSummary: () => read<TrainingSummary>("/summary"),

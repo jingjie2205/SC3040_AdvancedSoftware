@@ -3,7 +3,7 @@
  *
  * Everything here is a stand-in: the real server owns XP, streaks, ranks and challenge progress.
  */
-import { GAMIFICATION_RULES as R } from "./config";
+import { GAMIFICATION_RULES as R, checkInXpFor } from "./config";
 import { addDaysISO, todayISO } from "./dates";
 import { challengeSchema, checkInSchema } from "./schemas";
 import type { ApiResult, GamificationApi } from "./api";
@@ -16,16 +16,21 @@ import type {
   LeaderboardEntry,
   LeaderboardMetric,
   ParticipantStatus,
+  PendingXpItem,
+  XpEvent,
+  XpSource,
 } from "./types";
 
 const CURRENT_USER = "mock-you";
 
 interface MockUser {
   userId: string;
+  name: string | null;
   totalXp: number;
   currentStreak: number;
   longestStreak: number;
   lastCheckInDate: string | null;
+  mileageKm: number;
 }
 
 /** Progress is stored directly here; the server derives it from check-ins and XP events. */
@@ -42,17 +47,21 @@ interface MockChallenge {
 
 let users: MockUser[] | null = null;
 let challenges: MockChallenge[] | null = null;
+let history: XpEvent[] | null = null;
+let pending: PendingXpItem[] | null = null;
+/** Challenges whose reward the current user has already been paid. */
+const rewarded = new Set<string>(["challenge-workouts"]);
 let counter = 0;
 
 const delay = (ms = 150) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function seedUsers(): MockUser[] {
   return [
-    { userId: CURRENT_USER, totalXp: 340, currentStreak: 4, longestStreak: 9, lastCheckInDate: addDaysISO(-1) },
-    { userId: "mock-a1f3", totalXp: 1620, currentStreak: 12, longestStreak: 21, lastCheckInDate: todayISO() },
-    { userId: "mock-b7c2", totalXp: 910, currentStreak: 6, longestStreak: 6, lastCheckInDate: addDaysISO(-1) },
-    { userId: "mock-c0d9", totalXp: 455, currentStreak: 2, longestStreak: 14, lastCheckInDate: todayISO() },
-    { userId: "mock-d4e8", totalXp: 120, currentStreak: 3, longestStreak: 3, lastCheckInDate: addDaysISO(-3) },
+    { userId: CURRENT_USER, name: null, totalXp: 340, currentStreak: 4, longestStreak: 9, lastCheckInDate: addDaysISO(-1), mileageKm: 18.4 },
+    { userId: "mock-a1f3", name: "Wei Ling", totalXp: 1620, currentStreak: 12, longestStreak: 21, lastCheckInDate: todayISO(), mileageKm: 42.7 },
+    { userId: "mock-b7c2", name: "Arjun", totalXp: 910, currentStreak: 6, longestStreak: 6, lastCheckInDate: addDaysISO(-1), mileageKm: 9.2 },
+    { userId: "mock-c0d9", name: null, totalXp: 455, currentStreak: 2, longestStreak: 14, lastCheckInDate: todayISO(), mileageKm: 0 },
+    { userId: "mock-d4e8", name: "Siti", totalXp: 120, currentStreak: 3, longestStreak: 3, lastCheckInDate: addDaysISO(-3), mileageKm: 25.1 },
   ];
 }
 
@@ -100,6 +109,50 @@ function seedChallenges(): MockChallenge[] {
       ],
     },
   ];
+}
+
+function daysAgoAt(days: number, hour: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  d.setHours(hour, 0, 0, 0);
+  return d.toISOString();
+}
+
+function seedHistory(): XpEvent[] {
+  return [
+    { id: "xp-1", source: "checkin", amount: 16, createdAt: daysAgoAt(1, 8) },
+    { id: "xp-2", source: "meal", amount: R.mealXp, createdAt: daysAgoAt(1, 13) },
+    { id: "xp-3", source: "workout", amount: R.workoutXp, createdAt: daysAgoAt(2, 18) },
+    { id: "xp-4", source: "challenge", amount: R.challengeRewardXp, createdAt: daysAgoAt(6, 20) },
+  ];
+}
+
+function pendingStore(): PendingXpItem[] {
+  pending ??= [
+    {
+      id: "pending-1",
+      source: "meal",
+      sourceId: "meal-without-calories",
+      amount: R.mealXp,
+      reason: "This meal has no calorie estimate. Add its ingredients and re-sync.",
+      createdAt: daysAgoAt(0, 9),
+    },
+  ];
+  return pending;
+}
+
+function historyStore(): XpEvent[] {
+  history ??= seedHistory();
+  return history;
+}
+
+function earn(source: XpSource, amount: number) {
+  me().totalXp += amount;
+  historyStore().push({ id: `xp-${++counter}`, source, amount, createdAt: new Date().toISOString() });
+}
+
+function nameOf(userId: string): string | null {
+  return userStore().find((u) => u.userId === userId)?.name ?? null;
 }
 
 function userStore(): MockUser[] {
@@ -156,6 +209,7 @@ function toChallenge(c: MockChallenge): Challenge {
       const progress = p.status === "accepted" ? p.progress : 0;
       return {
         userId: p.userId,
+        displayName: nameOf(p.userId),
         status: p.status,
         progress,
         completed: progress >= c.targetValue,
@@ -167,6 +221,8 @@ function toChallenge(c: MockChallenge): Challenge {
   const { participants: _, ...rest } = c;
   return {
     ...rest,
+    creatorName: nameOf(c.creatorId),
+    rewardXp: R.challengeRewardXp,
     status: challengeStatus(c),
     myStatus: c.participants.find((p) => p.userId === CURRENT_USER)!.status,
     participants,
@@ -203,9 +259,8 @@ export const mockGamificationApi: GamificationApi = {
     user.currentStreak = user.lastCheckInDate === addDaysISO(-1) ? user.currentStreak + 1 : 1;
     user.longestStreak = Math.max(user.longestStreak, user.currentStreak);
     user.lastCheckInDate = today;
-    const bonusDays = Math.min(user.currentStreak, R.streakBonusCapDays) - 1;
-    const xpAwarded = R.checkInXp + R.streakBonusPerDay * Math.max(bonusDays, 0);
-    user.totalXp += xpAwarded;
+    const xpAwarded = checkInXpFor(user.currentStreak);
+    earn("checkin", xpAwarded);
     applyCheckInToChallenges(xpAwarded);
 
     return {
@@ -226,25 +281,66 @@ export const mockGamificationApi: GamificationApi = {
     const candidates =
       metric === "streak"
         ? userStore().filter((u) => liveStreak(u) > 0).sort((a, b) => b.currentStreak - a.currentStreak)
-        : [...userStore()].sort((a, b) => b.totalXp - a.totalXp);
+        : metric === "mileage"
+          ? [...userStore()].sort((a, b) => b.mileageKm - a.mileageKm)
+          : [...userStore()].sort((a, b) => b.totalXp - a.totalXp);
 
     const entries: LeaderboardEntry[] = candidates.slice(0, R.leaderboardLimit).map((u, i) => ({
       position: i + 1,
       userId: u.userId,
+      displayName: u.name,
       totalXp: u.totalXp,
       currentStreak: liveStreak(u),
+      mileageKm: metric === "mileage" ? u.mileageKm : 0,
       rank: rankFor(u.totalXp).rank,
       isCurrentUser: u.userId === CURRENT_USER,
     }));
-    return { metric, entries };
+    return { metric, friendCount: userStore().length - 1, entries };
+  },
+
+  async getXpHistory() {
+    await delay();
+    return [...historyStore()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20);
+  },
+
+  async getPendingXp() {
+    await delay();
+    const items = [...pendingStore()];
+    return { items, totalXp: items.reduce((sum, item) => sum + item.amount, 0) };
+  },
+
+  // The fixtures treat every held item as fixed by the time the user re-syncs.
+  async resyncPendingXp() {
+    await delay();
+    const released = pendingStore().splice(0);
+    for (const item of released) earn(item.source, item.amount);
+    return {
+      ok: true,
+      data: {
+        items: [],
+        totalXp: 0,
+        awardedXp: released.reduce((sum, item) => sum + item.amount, 0),
+        released: released.length,
+        stillPending: 0,
+        removed: 0,
+      },
+    };
   },
 
   async getChallenges() {
     await delay();
-    return challengeStore()
+    const list = challengeStore()
       .filter((c) => c.participants.some((p) => p.userId === CURRENT_USER && p.status !== "declined"))
       .sort((a, b) => b.startDate.localeCompare(a.startDate))
       .map(toChallenge);
+    for (const c of list) {
+      const mine = c.participants.find((p) => p.isCurrentUser);
+      if (mine?.status === "accepted" && mine.completed && !rewarded.has(c.id)) {
+        rewarded.add(c.id);
+        earn("challenge", R.challengeRewardXp);
+      }
+    }
+    return list;
   },
 
   async createChallenge(input): Promise<ApiResult<Challenge>> {

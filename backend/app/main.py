@@ -10,6 +10,7 @@ from .controllers.checkin import router as checkin_router
 from .controllers.gamification import router as gamification_router
 from .controllers.nutrition import router as nutrition_router
 from .training import install as install_training_routes
+from .controllers.chat import router as chat_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fitra.backend")
@@ -26,7 +27,7 @@ app = FastAPI(
 # CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL, "http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[settings.FRONTEND_URL, "http://localhost:3000", "http://127.0.0.1:3000", "https://sc-3040-fitra.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,6 +41,7 @@ app.include_router(strava_router)
 app.include_router(checkin_router)
 app.include_router(gamification_router)
 app.include_router(nutrition_router)
+app.include_router(chat_router)
 install_training_routes(app)
 
 @app.get("/health", tags=["Health"])

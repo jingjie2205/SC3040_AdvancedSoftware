@@ -6,8 +6,10 @@ import type { CheckInResult, GamificationStats } from "@/lib/gamification/types"
 import { ChallengesPanel } from "./_components/challenges-panel";
 import { CheckInPanel } from "./_components/checkin-panel";
 import { LeaderboardPanel } from "./_components/leaderboard-panel";
+import { PendingXpAlert } from "./_components/pending-xp-alert";
 import { StatsPanel } from "./_components/stats-panel";
 import { ErrorBox, Loading } from "./_components/ui";
+import { XpHistoryPanel } from "./_components/xp-history-panel";
 
 export default function LeaderboardPage() {
   const [stats, setStats] = useState<GamificationStats | null>(null);
@@ -76,9 +78,13 @@ export default function LeaderboardPage() {
         <Loading label="Loading your progress…" />
       ) : (
         <>
+          <PendingXpAlert refreshKey={refreshKey} onResynced={refresh} />
           <StatsPanel stats={stats} />
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <CheckInPanel stats={stats} onCheckedIn={handleCheckedIn} />
+            <div className="space-y-6">
+              <CheckInPanel stats={stats} onCheckedIn={handleCheckedIn} />
+              <XpHistoryPanel refreshKey={refreshKey} />
+            </div>
             <div className="lg:col-span-2">
               <LeaderboardPanel refreshKey={refreshKey} />
             </div>

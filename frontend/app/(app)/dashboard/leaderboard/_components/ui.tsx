@@ -16,9 +16,18 @@ export const tileClass = "rounded-xl border border-slate-800 bg-slate-950/60 p-4
 export const inputClass =
   "mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500";
 
-// Names arrive with the friends feature (F-1); until then only the current user is named.
-export function displayName({ userId, isCurrentUser }: { userId: string; isCurrentUser: boolean }): string {
-  return isCurrentUser ? "You" : `Athlete ${userId.slice(-4).toUpperCase()}`;
+/** Users who haven't set a profile name get a stable placeholder from their id. */
+export function displayName({
+  userId,
+  isCurrentUser,
+  displayName: name,
+}: {
+  userId: string;
+  isCurrentUser: boolean;
+  displayName?: string | null;
+}): string {
+  if (isCurrentUser) return "You";
+  return name || `Athlete ${userId.slice(-4).toUpperCase()}`;
 }
 
 export const CHALLENGE_METRIC_INFO: Record<
@@ -29,6 +38,8 @@ export const CHALLENGE_METRIC_INFO: Record<
   checkin_streak: { label: "Check-in streak", unit: "days", hint: "Longest run of daily check-ins", icon: Flame, defaultTarget: 7 },
   sessions: { label: "Workouts", unit: "workouts", hint: "Workouts logged on the Training page", icon: Dumbbell, defaultTarget: 10 },
 };
+
+export const FRIENDS_PATH = "/dashboard/friends";
 
 export function FieldError({ message }: { message?: string }) {
   if (!message) return null;

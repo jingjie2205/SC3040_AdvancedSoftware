@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CircleCheck, Plus } from "lucide-react";
+import { CircleCheck, Plus, Trophy } from "lucide-react";
 import { gamificationApi } from "@/lib/gamification/api";
 import type { Challenge, ChallengeParticipant, ChallengeStatus } from "@/lib/gamification/types";
 import { CreateChallengeForm } from "./create-challenge-form";
@@ -70,6 +70,24 @@ function ParticipantRow({ participant, challenge }: { participant: ChallengePart
   );
 }
 
+function RewardNote({ challenge }: { challenge: Challenge }) {
+  const mine = challenge.participants.find((p) => p.isCurrentUser);
+  if (mine?.completed) {
+    return (
+      <p className="mt-3 flex items-center gap-1 text-[11px] font-semibold text-emerald-300">
+        <Trophy className="h-3.5 w-3.5" aria-hidden="true" />
+        Target reached: +{challenge.rewardXp} XP earned
+      </p>
+    );
+  }
+  if (challenge.status === "ended") return null;
+  return (
+    <p className="mt-3 text-[11px] text-slate-400">
+      Reach the target to earn +{challenge.rewardXp} XP
+    </p>
+  );
+}
+
 function ChallengeCard({
   challenge,
   busy,
@@ -102,7 +120,8 @@ function ChallengeCard({
       {challenge.myStatus === "invited" && (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
           <p className="text-xs text-amber-200">
-            {displayName({ userId: challenge.creatorId, isCurrentUser: false })} invited you
+            {displayName({ userId: challenge.creatorId, isCurrentUser: false, displayName: challenge.creatorName })}{" "}
+            invited you
           </p>
           <div className="flex gap-2">
             <button type="button" disabled={busy} onClick={() => onRespond(false)} className={btnSecondary}>
@@ -120,6 +139,8 @@ function ChallengeCard({
           <ParticipantRow key={p.userId} participant={p} challenge={challenge} />
         ))}
       </ul>
+
+      <RewardNote challenge={challenge} />
     </li>
   );
 }
@@ -175,7 +196,7 @@ export function ChallengesPanel({ refreshKey }: { refreshKey: number }) {
   return (
     <div className={cardClass}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <CardHeader title="Challenges" subtitle="Set a goal and race other athletes to it" />
+        <CardHeader title="Challenges" subtitle="Set a goal and race your friends to it" />
         {!creating && (
           <button type="button" onClick={() => setCreating(true)} className={`${btnPrimary} mb-5 w-fit`}>
             <Plus className="h-3.5 w-3.5" aria-hidden="true" />

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import { Loader2 } from "lucide-react";
 import { gamificationApi } from "@/lib/gamification/api";
@@ -10,6 +11,7 @@ import {
   CHALLENGE_METRIC_INFO,
   ErrorBox,
   FieldError,
+  FRIENDS_PATH,
   Loading,
   Segmented,
   btnPrimary,
@@ -45,7 +47,7 @@ export function CreateChallengeForm({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Until the friends feature (F-1) exists, anyone on the leaderboard can be invited.
+  // The leaderboard lists the user and their friends, so it doubles as the invite list.
   useEffect(() => {
     let cancelled = false;
     gamificationApi
@@ -166,7 +168,7 @@ export function CreateChallengeForm({
       </div>
 
       <fieldset>
-        <legend className="text-xs text-slate-400">Invite athletes</legend>
+        <legend className="text-xs text-slate-400">Invite friends</legend>
         {athletesError ? (
           <p className="mt-1 text-xs text-rose-400">{athletesError}</p>
         ) : !athletes ? (
@@ -174,7 +176,13 @@ export function CreateChallengeForm({
             <Loading label="Loading athletes…" />
           </div>
         ) : athletes.length === 0 ? (
-          <p className="mt-1 text-xs text-slate-500">No other athletes yet. You can still compete solo.</p>
+          <p className="mt-1 text-xs text-slate-500">
+            No friends yet.{" "}
+            <Link href={FRIENDS_PATH} className="font-semibold text-emerald-400 hover:underline">
+              Add friends
+            </Link>{" "}
+            to invite them, or compete solo.
+          </p>
         ) : (
           <div className="mt-2 flex flex-wrap gap-2">
             {athletes.map((a) => {

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { CircleCheck, Flame, Loader2 } from "lucide-react";
 import { gamificationApi } from "@/lib/gamification/api";
+import { checkInXpFor } from "@/lib/gamification/config";
 import { checkInSchema, type CheckInInput } from "@/lib/gamification/schemas";
 import type { CheckInResult, GamificationStats } from "@/lib/gamification/types";
 import { CardHeader, ErrorBox, Segmented, btnPrimary, cardClass } from "./ui";
@@ -22,6 +23,25 @@ const QUESTIONS: { field: Field; label: string; low: string; high: string }[] = 
 ];
 
 const EMPTY: Record<Field, Score | null> = { muscleFatigue: null, mood: null, dietAdherence: null };
+
+/** A live streak here always ended yesterday (today's check-in isn't done yet), so checking in extends it. */
+function StreakPreview({ currentStreak }: { currentStreak: number }) {
+  const next = currentStreak + 1;
+  return (
+    <div className="mb-5 flex items-center gap-3 rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3">
+      <Flame className="h-5 w-5 shrink-0 text-orange-400" aria-hidden="true" />
+      <div className="text-xs">
+        <p className="font-semibold text-orange-200">
+          {currentStreak > 0 ? `${currentStreak}-day streak` : "No streak yet"}
+        </p>
+        <p className="mt-0.5 text-orange-100/80">
+          {currentStreak > 0 ? `Check in today to make it ${next} days` : "Check in today to start one"}{" "}
+          <span className="font-semibold text-emerald-300">+{checkInXpFor(next)} XP</span>
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export function CheckInPanel({
   stats,
@@ -82,6 +102,7 @@ export function CheckInPanel({
   return (
     <div className={cardClass}>
       <CardHeader title="Daily check-in" subtitle="Three quick questions to earn XP and grow your streak" />
+      <StreakPreview currentStreak={stats.currentStreak} />
       <div className="space-y-5">
         {QUESTIONS.map((q) => (
           <div key={q.field}>

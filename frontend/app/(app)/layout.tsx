@@ -102,8 +102,8 @@ export default function DashboardLayout({
     { name: "Nutrition", href: "/dashboard/nutrition", icon: Apple },
     { name: "AI Assistance", href: "/dashboard/ai", icon: Sparkles },
     { name: "Leaderboard", href: "/dashboard/leaderboard", icon: Trophy },
-    { name: "Settings", href: "/dashboard/settings", icon: Settings },
     { name: "Friends", href: "/dashboard/friends", icon: Users },
+    { name: "Settings", href: "/dashboard/settings", icon: Settings },
   ];
 
   return (

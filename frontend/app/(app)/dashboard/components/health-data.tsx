@@ -59,6 +59,7 @@ export default function HealthData() {
   const [editingHealth, setEditingHealth] = useState(false);
   const [userHeight, setUserHeight] = useState("");
   const [userWeight, setUserWeight] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const bmi = useMemo(() => {
     if (height && weight) return computeBmi(height, weight);
@@ -93,6 +94,7 @@ export default function HealthData() {
   }, []);
 
   function startEditHealth() {
+    setSaveError(null);
     setUserHeight(height ? String(height) : "");
     setUserWeight(weight ? String(weight) : "");
     setEditingHealth(true);
@@ -120,8 +122,12 @@ export default function HealthData() {
       setHeight(updatedUser.height);
       setWeight(updatedUser.weight);
       setEditingHealth(false);
+      setSaveError(null);
     } catch (error) {
       console.error("Error saving health data:", error);
+      setSaveError(
+        "Unable to update your data, contact an administrator if you think this is unintentional",
+      );
     }
   }
 
@@ -162,6 +168,11 @@ export default function HealthData() {
           )}
         </div>
       </div>
+      {saveError && (
+        <p role="alert" className="mb-4 text-sm text-rose-400">
+          {saveError}
+        </p>
+      )}
 
       {!editingHealth ? (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

@@ -98,6 +98,10 @@ class TrainingPlan(ApiModel):
     # The profile goal this plan was built for, as it stood when it was generated or last adapted.
     goal: Optional[Goal] = None
     last_adaptation: Optional[PlanAdaptation] = None
+    # The weekly load increase (percent) this plan was built with, learned from the athlete's own history (see
+    # forecast.py). None for a plan built before that existed, or on a database that can't store it: the standard
+    # `config.weekly_progression_pct` then applies.
+    progression_pct: Optional[float] = None
 
 
 class PlannedSession(ApiModel):
@@ -122,6 +126,11 @@ class WorkoutSession(ApiModel):
     avg_hr: Optional[int] = None
     calories: Optional[int] = None
     source: WorkoutSource = "manual"
+    # For a log saved from Strava, the id of the Strava activity it came from; None for everything else.
+    external_id: Optional[str] = None
+    # Metres, from Strava or typed in when logging a run or ride; None when not given. Only the leaderboard's
+    # mileage view reads it: no training calculation does.
+    distance_m: Optional[float] = None
     created_at: datetime
 
 
@@ -240,6 +249,67 @@ class RemoveResult(ApiModel):
     redistributed_count: int
 
 
+class ForecastWeek(ApiModel):
+    week_start: date
+    load: float
+
+
+class ForecastAhead(ApiModel):
+    week_start: date
+    value: float
+    low: float
+    high: float
+
+
+class ForecastStep(ApiModel):
+    key: str
+    label: str
+    detail: str
+
+
+class ForecastBacktest(ApiModel):
+    """How the forecast did on the athlete's own earlier weeks, against two plain alternatives. Mean absolute error, pts."""
+
+    folds: int
+    model_mae: float
+    last_week_mae: float
+    average_mae: float
+    # How much of its usual say the athlete's own trend keeps in the plan's progression because of this record, 0 to 1.
+    trust: float
+
+
+class ForecastView(ApiModel):
+    """
+    The athlete's weekly load, the forecast fitted to it, and how that sets the plan's weekly progression. Their own
+    completed training only: Strava logs never count, and no readiness data is involved.
+    """
+
+    method: Literal["holt", "default"]
+    weeks_of_history: int
+    weeks_needed: int
+    history: List[ForecastWeek]
+    fitted: List[ForecastWeek]  # the model's one-week-ahead prediction for each week after the first
+    ahead: List[ForecastAhead]
+    level: Optional[float] = None
+    trend_pct: Optional[float] = None
+    alpha: Optional[float] = None
+    beta: Optional[float] = None
+    adherence: Optional[float] = None
+    acwr: Optional[float] = None
+    standard_pct: float
+    progression_pct: float  # what the forecast supports as of today
+    cap_pct: float
+    plan_progression_pct: Optional[float] = None  # what the active plan was built with, if it recorded one
+    backtest: Optional[ForecastBacktest] = None
+    steps: List[ForecastStep]
+
+
+class AddSessionResult(ApiModel):
+    session: PlannedSession
+    # How many of the week's other sessions had their points changed to make room for it.
+    adjusted_count: int
+
+
 class LogResult(ApiModel):
     workout: WorkoutSession
     session: Optional[PlannedSession] = None
@@ -258,8 +328,39 @@ class GeneratePlanRequest(ApiModel):
     confirm_replace: bool = False
 
 
-class RescheduleRequest(ApiModel):
+class AddSessionRequest(ApiModel):
+    """A session the athlete plans by hand. Leave the length out and it follows their preferred length for that intensity."""
+
     date: date
+    activity_type: ActivityType
+    intensity_band: IntensityBand
+    target_duration_min: Optional[int] = Field(
+        default=None, ge=RULES.session_duration_min, le=RULES.session_duration_max
+    )
+
+
+_Day = date  # `date: Optional[date] = None` would read its own default as the type inside the class body
+
+
+class SessionUpdateRequest(ApiModel):
+    """Either a new day (a move) or new details for the session where it stands, never both in one request."""
+
+    date: Optional[_Day] = None
+    activity_type: Optional[ActivityType] = None
+    intensity_band: Optional[IntensityBand] = None
+    target_duration_min: Optional[int] = Field(
+        default=None, ge=RULES.session_duration_min, le=RULES.session_duration_max
+    )
+
+    @model_validator(mode="after")
+    def _a_move_or_a_change(self) -> "SessionUpdateRequest":
+        details = (self.activity_type, self.intensity_band, self.target_duration_min)
+        changes_details = any(value is not None for value in details)
+        if self.date is not None and changes_details:
+            raise ValueError("Move the session or change its details, not both at once")
+        if self.date is None and not changes_details:
+            raise ValueError("Say what to change")
+        return self
 
 
 class SessionResponseRequest(ApiModel):
@@ -284,4 +385,12 @@ class LogWorkoutInput(ApiModel):
     actual_volume: float = Field(gt=0, le=RULES.workout_volume_max)
     rpe: Optional[int] = Field(default=None, ge=RULES.workout_rpe_min, le=RULES.workout_rpe_max)
     avg_hr: Optional[int] = Field(default=None, ge=RULES.workout_hr_min, le=RULES.workout_hr_max)
-    calories: Optional[int] = Field(default=None, ge=0)
+    calories: Optional[int] = Field(default=None, ge=0, le=RULES.workout_calories_max)
+    # Only runs and rides have a distance; the leaderboard's mileage view counts the runs.
+    distance_km: Optional[float] = Field(default=None, gt=0, le=RULES.workout_distance_km_max)
+
+    @model_validator(mode="after")
+    def _distance_only_for_runs_and_rides(self) -> "LogWorkoutInput":
+        if self.distance_km is not None and self.activity_type not in ("run", "cycling"):
+            raise ValueError("Distance can only be given for a run or a ride")
+        return self

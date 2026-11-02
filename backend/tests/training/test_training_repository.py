@@ -5,6 +5,7 @@ import pytest
 from postgrest.exceptions import APIError
 
 from app.training import repository
+from app.training.errors import TrainingError
 from app.training.models import (
     PlannedSession,
     ReadinessFactor,
@@ -65,12 +66,19 @@ class RecordingClient:
 
     def __init__(self, rows=None):
         self.rows, self.queries, self.rpcs, self.error = rows or {}, [], [], None
+        self.features = {"calories": True}  # what training_schema_features() answers on a migrated database
 
     def table(self, name):
         return RecordedQuery(self, name)
 
     def rpc(self, name, params):
         self.rpcs.append((name, params))
+        if name == "training_schema_features":
+            def ask():
+                if self.error:
+                    raise self.error
+                return SimpleNamespace(data=self.features)
+            return SimpleNamespace(execute=ask)
         return SimpleNamespace(execute=lambda: SimpleNamespace(data=None))
 
 
@@ -199,6 +207,131 @@ def test_payload_rows_carry_no_user_id_so_a_payload_cannot_write_for_someone_els
     assert payload["upsert_plans"][0]["last_adaptation"]["adapted_on"] == "2026-09-30"
 
 
+def _with_calories(value):
+    changes = _changes()
+    changes.insert_workouts = [changes.insert_workouts[0].model_copy(update={"calories": value})]
+    return changes
+
+
+def _calls(client):
+    return [name for name, _ in client.rpcs]
+
+
+def test_calories_travel_in_the_payload_once_the_database_says_it_can_keep_them():
+    repo, client = repo_with()
+    repo.apply(USER_A, _with_calories(310))
+    assert _calls(client) == ["training_schema_features", "training_apply_changes"]
+    assert client.rpcs[1][1]["p_changes"]["insert_workouts"][0]["calories"] == 310
+    assert client.queries == []
+
+    plain_repo, plain_client = repo_with()
+    plain_repo.apply(USER_A, _with_calories(None))
+    assert _calls(plain_client) == ["training_apply_changes"], "a log without calories asks nothing extra"
+
+
+def test_the_database_is_asked_about_calories_until_it_has_said_yes_and_then_not_again():
+    repo, client = repo_with()
+    repo.apply(USER_A, _with_calories(100))
+    repo.apply(USER_A, _with_calories(200))
+    assert _calls(client).count("training_schema_features") == 1 and _calls(client).count("training_apply_changes") == 2
+
+
+@pytest.mark.parametrize("code", ["PGRST202", "42883", "42703", "PGRST204", "PGRST205", "42P01"])
+def test_calories_are_refused_not_dropped_on_a_database_that_cant_keep_them(code):
+    repo, client = repo_with()
+    client.error = APIError({"message": "could not find the function training_schema_features", "code": code,
+                             "hint": None, "details": None})
+    with pytest.raises(TrainingError) as refused:
+        repo.apply(USER_A, _with_calories(310))
+    assert refused.value.code == "UNAVAILABLE" and "migration" in refused.value.message
+    assert _calls(client) == ["training_schema_features"], "nothing was written"
+    client.error = None  # the migration is applied later: the next log goes through
+    repo.apply(USER_A, _with_calories(310))
+    assert _calls(client)[-1] == "training_apply_changes"
+
+
+@pytest.mark.parametrize("answer", [None, {}, {"calories": False}, {"calories": "yes"}, ["calories"], "ok"])
+def test_calories_are_refused_when_the_database_doesnt_say_it_keeps_them(answer):
+    """Someone adding the column by hand isn't enough: only the migration's own function answers yes."""
+    repo, client = repo_with()
+    client.features = answer
+    with pytest.raises(TrainingError) as refused:
+        repo.apply(USER_A, _with_calories(310))
+    assert refused.value.code == "UNAVAILABLE"
+    assert _calls(client) == ["training_schema_features"]
+
+
+def test_any_other_database_error_asking_about_calories_is_not_papered_over():
+    repo, client = repo_with()
+    client.error = APIError({"message": "boom", "code": "XX000", "hint": None, "details": None})
+    with pytest.raises(APIError):
+        repo.apply(USER_A, _with_calories(310))
+    assert _calls(client) == ["training_schema_features"]
+
+
+# ------------------------------------------------------------------ the weekly progression a plan is built with
+
+
+def _with_progression(value):
+    changes = _changes()
+    changes.upsert_plans = [changes.upsert_plans[0].model_copy(update={"progression_pct": value})]
+    return changes
+
+
+def test_a_plans_weekly_progression_travels_once_the_database_says_it_can_keep_it():
+    repo, client = repo_with()
+    client.features = {"calories": True, "progression": True}
+    repo.apply(USER_A, _with_progression(3.5))
+    assert _calls(client) == ["training_schema_features", "training_apply_changes"]
+    assert client.rpcs[1][1]["p_changes"]["upsert_plans"][0]["progression_pct"] == 3.5
+
+    plain_repo, plain_client = repo_with()
+    plain_repo.apply(USER_A, _with_progression(None))
+    assert _calls(plain_client) == ["training_apply_changes"], "a plan with no rate asks nothing extra"
+
+
+def test_the_database_is_asked_about_progression_until_it_has_said_yes_and_then_not_again():
+    repo, client = repo_with()
+    client.features = {"calories": True, "progression": True}
+    assert repo.supports_plan_progression() and repo.supports_plan_progression()
+    repo.apply(USER_A, _with_progression(2.0))
+    assert _calls(client).count("training_schema_features") == 1
+
+
+@pytest.mark.parametrize("code", ["PGRST202", "42883", "42703", "PGRST204", "PGRST205", "42P01"])
+def test_a_plans_progression_is_refused_not_dropped_on_a_database_that_cant_keep_it(code):
+    repo, client = repo_with()
+    client.error = APIError({"message": "could not find the function training_schema_features", "code": code,
+                             "hint": None, "details": None})
+    assert repo.supports_plan_progression() is False
+    with pytest.raises(TrainingError) as refused:
+        repo.apply(USER_A, _with_progression(3.5))
+    assert refused.value.code == "UNAVAILABLE" and "migration" in refused.value.message
+    assert "training_apply_changes" not in _calls(client), "nothing was written"
+    client.error = None
+    client.features = {"calories": True, "progression": True}  # the migration is applied later: no restart needed
+    repo.apply(USER_A, _with_progression(3.5))
+    assert _calls(client)[-1] == "training_apply_changes"
+
+
+@pytest.mark.parametrize("answer", [None, {}, {"calories": True}, {"progression": False}, {"progression": "yes"}, ["progression"], "ok"])
+def test_progression_is_not_assumed_unless_the_database_says_it_keeps_it(answer):
+    """Calories being kept says nothing about the rate: only the migration's own answer counts."""
+    repo, client = repo_with()
+    client.features = answer
+    assert repo.supports_plan_progression() is False
+    with pytest.raises(TrainingError):
+        repo.apply(USER_A, _with_progression(3.5))
+    assert "training_apply_changes" not in _calls(client)
+
+
+def test_any_other_database_error_asking_about_progression_is_not_papered_over():
+    repo, client = repo_with()
+    client.error = APIError({"message": "boom", "code": "XX000", "hint": None, "details": None})
+    with pytest.raises(APIError):
+        repo.supports_plan_progression()
+
+
 def test_an_empty_change_set_has_the_expected_empty_shape():
     payload = changes_payload(ChangeSet())
     assert payload == {"supersede_active_plan": False, "delete_session_ids": [], "upsert_plans": [],
@@ -250,3 +383,28 @@ def test_any_other_database_error_reading_the_profile_is_not_swallowed():
     client.error = APIError({"message": "permission denied", "code": "42501", "hint": None, "details": None})
     with pytest.raises(APIError):
         repo.get_profile(USER_A)
+
+
+def _with_distance(metres, calories=None):
+    changes = _changes()
+    changes.insert_workouts = [
+        changes.insert_workouts[0].model_copy(update={"distance_m": metres, "calories": calories})
+    ]
+    return changes
+
+
+def test_a_distance_travels_in_the_payload_once_the_database_says_it_can_keep_it():
+    repo, client = repo_with()
+    client.features = {"calories": True, "distance": True}
+    repo.apply(USER_A, _with_distance(5230.0))
+    assert _calls(client) == ["training_schema_features", "training_apply_changes"]
+    assert client.rpcs[1][1]["p_changes"]["insert_workouts"][0]["distance_m"] == 5230.0
+
+
+def test_a_distance_is_refused_not_dropped_on_a_database_that_only_keeps_calories():
+    repo, client = repo_with()  # answers {"calories": True}: the calories migration ran, the distance one didn't
+    repo.apply(USER_A, _with_calories(300))
+    with pytest.raises(TrainingError) as refused:
+        repo.apply(USER_A, _with_distance(5230.0))
+    assert refused.value.code == "UNAVAILABLE" and "Distance" in refused.value.message
+    assert _calls(client).count("training_apply_changes") == 1, "the log with a distance wasn't written"

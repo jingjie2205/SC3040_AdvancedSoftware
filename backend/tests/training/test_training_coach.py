@@ -376,7 +376,7 @@ def test_the_sdk_makes_the_request_we_expect_and_reads_the_reply():
 
     prompt = build_prompt(context())
     assert sdk_client(handler).complete(SYSTEM_INSTRUCTION, prompt) == "Keep it easy today."
-    assert seen["method"] == "POST" and seen["url"].endswith("/models/gemini-2.5-flash:generateContent")
+    assert seen["method"] == "POST" and seen["url"].endswith(f"/models/{COACH_RULES.model}:generateContent")
     assert seen["key"] == "test-key"
     body = seen["body"]
     assert body["contents"][0]["parts"][0]["text"] == prompt

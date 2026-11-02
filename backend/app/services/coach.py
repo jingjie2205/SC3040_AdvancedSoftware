@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
-from .config import get_settings
+from ..commons.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ Prescribe a scientifically rigorous recommendation optimizing for adaptation whi
 
         client = genai.Client(api_key=settings.GOOGLE_GENERATIVE_AI_API_KEY)
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -156,8 +156,14 @@ Prescribe a scientifically rigorous recommendation optimizing for adaptation whi
             return response.parsed  # type: ignore
 
         if response.text:
-            data = json.loads(response.text)
-            return RecommendationSchema.model_validate(data)
+            try:
+                data = json.loads(response.text)
+                return RecommendationSchema.model_validate(data)
+            except json.JSONDecodeError:
+                logger.error(
+                    f"Failed to decode Gemini JSON response: {response.text}",
+                    exc_info=True,
+                )
 
         return _get_mock_recommendation(acwr, acute_load, chronic_load)
     except Exception as e:
