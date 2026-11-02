@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -116,14 +116,15 @@ class DashboardTrainingService:
 
 def test_dashboard_training_summary():
     app.dependency_overrides[get_service] = DashboardTrainingService
+    today = datetime.now(timezone.utc).date()
 
     response = client.get(
         "/api/v1/training/summary",
-        headers={"X-Client-Date": "2026-10-26"},
+        headers={"X-Client-Date": today.isoformat()},
     )
 
     assert response.status_code == 200
     body = response.json()
-    assert body["date"] == "2026-10-26"
+    assert body["date"] == today.isoformat()
     assert body["today"]["state"] == "rest_day"
     assert body["readiness"]["score"] == 80
