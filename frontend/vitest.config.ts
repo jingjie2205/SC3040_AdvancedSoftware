@@ -15,5 +15,16 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html"],
+      include: ["app/**/*.{ts,tsx}", "lib/**/*.{ts,tsx}", "middleware.ts"],
+      exclude: [
+        "**/*.d.ts",
+        "**/node_modules/**",
+        "**/.next/**",
+        "**/coverage/**",
+      ],
+    },
   },
 });
