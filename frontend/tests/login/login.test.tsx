@@ -119,6 +119,27 @@ describe("Login Page Tests", () => {
         // Verify the user is not redirected
         expect(mocks.push).not.toHaveBeenCalled();
     });
+
+    // LGT-4: Remember Me Checkbox
+    it("LGT-4: allows users to toggle the Remember me checkbox", () => {
+        render(<LoginPage />);
+
+        const rememberMeCheckbox = screen.getByRole("checkbox", {
+            name: "Remember me",
+        });
+
+        // Initially unchecked.
+        expect(rememberMeCheckbox).not.toBeChecked();
+
+        // Check the checkbox.
+        fireEvent.click(rememberMeCheckbox);
+        expect(rememberMeCheckbox).toBeChecked();
+
+        // Uncheck the checkbox.
+        fireEvent.click(rememberMeCheckbox);
+        expect(rememberMeCheckbox).not.toBeChecked();
+    });
+    
 });
 
 describe("Middleware Tests", () => {

@@ -466,4 +466,171 @@ describe("Friends Page Tests", () => {
             );
     });
 
+    // Clear Search Results (F-9)
+    it("F-9: clears the search input and results", async () => {
+        render(<FriendsPage />);
+
+        // Wait for initial loading to finish.
+        await screen.findByText("Aisha Tan");
+
+        // Open Find Friends.
+        fireEvent.click(
+            screen.getByRole("button", { name: "Find Friends" })
+        );
+
+        // Search for Adam.
+        const searchInput = screen.getByPlaceholderText("Search names...");
+
+        fireEvent.change(searchInput, {
+            target: { value: "Adam" },
+        });
+
+        // Verify that Adam appears in the results.
+        expect(await screen.findByText("Adam Lee")).toBeInTheDocument();
+
+        // Click Clear Search.
+        fireEvent.click(
+            screen.getByRole("button", { name: "Clear search" })
+        );
+
+        // Verify that the input and results are cleared.
+        expect(searchInput).toHaveValue("");
+
+        expect(
+            screen.queryByText("Adam Lee")
+        ).not.toBeInTheDocument();
+
+        expect(
+            screen.getByText("Enter a name to find people.")
+        ).toBeInTheDocument();
+    });
+
+
+    // View Outgoing Friend Requests (F-10)
+    it("F-10: displays outgoing pending friend requests", async () => {
+        // Simulate an outgoing pending request to Adam.
+        mocks.friendRequestsData = [
+            {
+                id: "request-3",
+                sender_id: "user-1",
+                recipient_id: "user-2",
+                status: "pending",
+                created_at: "2026-10-01T10:00:00Z",
+                updated_at: "2026-10-01T10:00:00Z",
+            },
+        ];
+
+        mocks.profileData = [
+            {
+                user_id: "user-2",
+                name: "Adam Lee",
+            },
+        ];
+
+        render(<FriendsPage />);
+
+        // Wait for initial loading to finish.
+        expect(await screen.findByText("No friends yet")).toBeInTheDocument();
+
+        // Open the Requests tab.
+        fireEvent.click(
+            screen.getByRole("button", { name: /Requests/ })
+        );
+
+        // Verify that the outgoing request is displayed.
+        expect(await screen.findByText("Adam Lee")).toBeInTheDocument();
+        expect(screen.getByText("Sent (1)")).toBeInTheDocument();
+        expect(screen.getByText("Pending")).toBeInTheDocument();
+    });
+
+
+    // Respond to Incoming Request from Search (F-11)
+    it("F-11: navigates to Requests when responding to an incoming request from search", async () => {
+        mocks.friendRequestsData = [
+            {
+                id: "request-4",
+                sender_id: "user-2",
+                recipient_id: "user-1",
+                status: "pending",
+                created_at: "2026-10-01T10:00:00Z",
+                updated_at: "2026-10-01T10:00:00Z",
+            },
+        ];
+
+        mocks.profileData = [
+            {
+                user_id: "user-2",
+                name: "Adam Lee",
+            },
+        ];
+
+        mocks.searchResultsData = [
+            {
+                user_id: "user-2",
+                name: "Adam Lee",
+            },
+        ];
+
+        render(<FriendsPage />);
+
+        // Wait for initial loading to finish.
+        await screen.findByText("No friends yet");
+
+        // Open Find Friends and search for Adam.
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Find Friends" })[0]
+        );
+
+        fireEvent.change(screen.getByPlaceholderText("Search names..."), {
+            target: { value: "Adam" },
+        });
+
+        // Click Respond.
+        fireEvent.click(
+            await screen.findByRole("button", { name: "Respond" })
+        );
+
+        // Verify that the Requests tab is displayed.
+        expect(
+            await screen.findByText("Friend Requests")
+        ).toBeInTheDocument();
+
+        expect(screen.getByText("Incoming (1)")).toBeInTheDocument();
+    });
+
+    // Error Handling for Friend Request Response (F-12)
+    it("F-12: displays an error when responding to a friend request fails", async () => {
+        mocks.friendRequestsData = [
+            {
+            id: "request-5",
+            sender_id: "user-2",
+            recipient_id: "user-1",
+            status: "pending",
+            created_at: "2026-11-03T10:00:00Z",
+            },
+        ];
+
+        mocks.profileData = [
+            { user_id: "user-2", name: "Adam Lee" },
+        ];
+
+        mocks.rpc.mockResolvedValueOnce({
+            error: { message: "Unable to respond to friend request" },
+        });
+
+        render(<FriendsPage />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Requests" }));
+
+        fireEvent.click(
+            await screen.findByRole("button", {
+                name: "Accept Adam Lee's request",
+            })
+        );
+
+        expect(
+            await screen.findByText("Unable to respond to friend request")
+        ).toBeInTheDocument();
+    });
+
 });
