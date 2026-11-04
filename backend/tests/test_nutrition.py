@@ -788,7 +788,7 @@ class TestMealImageNormalization:
 
 
 class TestMealAnalysisEndpoint:
-    @pytest.mark.parametrize("notes", [None, "", "n" * 1000])
+    @pytest.mark.parametrize("notes", [None, "", "n" * 499, "n" * 500])
     def test_accepts_optional_notes_and_limit(self, client, monkeypatch, notes):
         api, db = client
         data = payload()
@@ -828,7 +828,7 @@ class TestMealAnalysisEndpoint:
         response = api.post(
             "/api/nutrition/analyze",
             files=files,
-            data={"notes": "" if case == "missing_file" else "n" * 1001},
+            data={"notes": "" if case == "missing_file" else "n" * 501},
         )
 
         assert response.status_code == 422
