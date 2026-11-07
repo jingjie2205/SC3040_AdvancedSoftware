@@ -127,8 +127,9 @@ export default function MealAnalysis() {
               <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" className="hidden" aria-label="Choose meal photo" onChange={event => { selectFile(event.target.files?.[0]); event.target.value = ""; }} />
               <input ref={cameraInput} type="file" accept="image/*" capture="environment" className="hidden" aria-label="Take meal photo" onChange={event => { selectFile(event.target.files?.[0]); event.target.value = ""; }} />
             </div>
-            <label className="block text-sm text-slate-300">Anything the photo can’t tell us?<textarea value={notes} onChange={event => setNotes(event.target.value)} maxLength={1000} rows={3} placeholder="E.g. cooked with 1 tbsp butter, or eaten after a 10 km run. You can paste a voice note transcript here." className={`${input} mt-2 resize-y`} /></label>
-            <p className="text-right text-xs text-slate-500">{notes.length}/1,000</p>
+            <label className="block text-sm text-slate-300">Anything the photo can’t tell us?<textarea value={notes} onChange={event => setNotes(event.target.value.slice(0, 500))} maxLength={500} rows={3} placeholder="E.g. cooked with 1 tbsp butter, or eaten after a 10 km run. You can paste a voice note transcript here." className={`${input} mt-2 resize-y`} /></label>
+            <p className="text-right text-xs text-slate-500">{notes.length}/500</p>
+            {notes.length === 500 && <p role="alert" className="text-xs text-amber-300">Character limit reached (max 500 characters).</p>}
             <button type="button" onClick={analyze} disabled={!file || !!busy} className={`${button} w-full bg-emerald-400 text-slate-950 hover:bg-emerald-300`}>{busy === "analyze" ? <LoaderCircle size={17} className="animate-spin" /> : <Sparkles size={17} />}{busy === "analyze" ? "Analyzing your meal…" : "Analyze meal"}</button>
             <button type="button" onClick={() => { beginDraft({ meal_name: "", confidence_score: 0, training_context_note: "Manually entered meal; no AI estimate.", items: [blankItem()] }); setError(""); setSuccess(""); }} className="w-full py-2 text-xs text-slate-400 hover:text-white">Or enter a meal manually</button>
           </fieldset>
@@ -148,7 +149,7 @@ export default function MealAnalysis() {
             </div>)}
             {!draft.items.length && <p className="text-sm text-amber-300">Add at least one ingredient before saving.</p>}
             <p className="text-xs leading-5 text-slate-500">Photo estimates can miss ingredients and portion sizes. Check the values before you save.</p>
-            <div className="flex flex-wrap gap-3"><button disabled={!draft.items.length || !draft.meal_name.trim() || draft.items.some(item => !item.name.trim()) || !!busy} className={`${button} flex-1 bg-emerald-400 text-slate-950 hover:bg-emerald-300`}>{busy === "save" ? <LoaderCircle size={17} className="animate-spin" /> : <Check size={17} />}{busy === "save" ? "Saving meal…" : "Confirm & log meal"}</button><button type="button" className={`${button} border border-slate-700 text-slate-300`} onClick={() => setDraft(null)}>Discard draft</button></div>
+            <div className="flex flex-wrap gap-3"><button disabled={!draft.items.length || !draft.meal_name.trim() || draft.items.some(item => !item.name.trim()) || !!busy} className={`${button} flex-1 bg-emerald-400 text-slate-950 hover:bg-emerald-300`}>{busy === "save" ? <LoaderCircle size={17} className="animate-spin" /> : <Check size={17} />}{busy === "save" ? "Saving meal…" : "Confirm & log meal"}</button><button type="button" className={`${button} border border-slate-700 text-slate-300`} onClick={() => { if (window.confirm("Are you sure you want to discard this meal log?")) setDraft(null); }}>Discard draft</button></div>
           </fieldset>
         </form>}
       </div>

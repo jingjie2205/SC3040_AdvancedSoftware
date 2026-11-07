@@ -42,7 +42,7 @@ def update_targets(body: CalorieTargetsUpdate, user_id: str = Depends(get_curren
 @router.post("/analyze", response_model=MealAnalysis)
 async def analyze_meal(
     file: Annotated[UploadFile, File()],
-    notes: str = Form(default="", max_length=1000),
+    notes: str = Form(default="", max_length=500),
     user_id: str = Depends(get_current_user_id),
 ):
     try:

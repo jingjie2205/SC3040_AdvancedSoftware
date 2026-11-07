@@ -126,7 +126,7 @@ describe("Meal analysis", () => {
     render(<MealAnalysis />);
     const notes = screen.getByRole("textbox", { name: "Anything the photo can’t tell us?" });
     fireEvent.change(notes, { target: { value: "After a run" } });
-    expect(screen.getByText("11/1,000")).toBeInTheDocument();
+    expect(screen.getByText("11/500")).toBeInTheDocument();
     await review();
     expect(analyzeMeal).toHaveBeenCalledExactlyOnceWith(photo, "After a run");
     expect(saveMeal).not.toHaveBeenCalled();
@@ -150,6 +150,7 @@ describe("Meal analysis", () => {
   });
 
   it("supports manual ingredients, nutrient edits, removal and discarding", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<MealAnalysis />);
     fireEvent.click(screen.getByRole("button", { name: "Or enter a meal manually" }));
     expect(screen.getByText("Manual entry")).toBeInTheDocument();
@@ -180,6 +181,46 @@ describe("Meal analysis", () => {
     expect(saveMeal).not.toHaveBeenCalled();
     expect(analyzeMeal).not.toHaveBeenCalled();
     await screen.findByText("A fresh plate, a fresh start.");
+  });
+
+  it.each([499, 500])("accepts a context note of %i characters", async length => {
+    render(<MealAnalysis />);
+    const notes = "n".repeat(length);
+    fireEvent.change(screen.getByRole("textbox", { name: "Anything the photo can’t tell us?" }), {
+      target: { value: notes },
+    });
+    await review();
+    expect(analyzeMeal).toHaveBeenCalledExactlyOnceWith(photo, notes);
+  });
+
+  it("truncates oversized notes and shows the 500-character limit", async () => {
+    render(<MealAnalysis />);
+    const field = screen.getByRole("textbox", { name: "Anything the photo can’t tell us?" });
+    expect(field).toHaveAttribute("maxlength", "500");
+    fireEvent.change(field, { target: { value: "n".repeat(501) } });
+    expect(field).toHaveValue("n".repeat(500));
+    expect(screen.getByText("500/500")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Character limit reached (max 500 characters).");
+    fireEvent.change(field, { target: { value: "Shorter note" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await review();
+    expect(analyzeMeal).toHaveBeenCalledExactlyOnceWith(photo, "Shorter note");
+  });
+
+  it.each(["photo", "manual"])("confirms before discarding a %s draft and preserves cancelled edits", async source => {
+    const confirmDiscard = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    render(<MealAnalysis />);
+    if (source === "photo") await review();
+    else fireEvent.click(screen.getByRole("button", { name: "Or enter a meal manually" }));
+    fireEvent.change(screen.getByLabelText("Meal name"), { target: { value: "Keep my edits" } });
+    fireEvent.click(screen.getByRole("button", { name: "Discard draft" }));
+    expect(confirmDiscard).toHaveBeenCalledWith("Are you sure you want to discard this meal log?");
+    expect(screen.getByLabelText("Meal name")).toHaveValue("Keep my edits");
+    expect(saveMeal).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Discard draft" }));
+    expect(confirmDiscard).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("heading", { name: "Review your meal" })).not.toBeInTheDocument();
+    expect(saveMeal).not.toHaveBeenCalled();
   });
 
   it.each([new Error("Analysis unavailable"), null])("reports analysis errors and restores the controls: %s", async failure => {
